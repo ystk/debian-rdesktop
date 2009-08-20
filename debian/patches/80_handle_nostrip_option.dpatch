@@ -1,0 +1,21 @@
+#! /bin/sh /usr/share/dpatch/dpatch-run
+## 80_handle_nostrip_option.dpatch by Laszlo Boszormenyi <gcs@debian.hu> .
+##
+## All lines beginning with `## DP:' are a description of the patch.
+## DP: Don't strip binary if asked for nostrip via DEB_BUILD_OPTIONS .
+
+@DPATCH@
+--- rdesktop-1.6.0.orig/Makefile.in
++++ rdesktop-1.6.0/Makefile.in
+@@ -18,7 +18,11 @@
+ INSTALL     = @INSTALL@
+ CFLAGS      = @CFLAGS@ @X_CFLAGS@ @DEFS@ -DKEYMAP_PATH=\"$(KEYMAP_PATH)\"
+ LDFLAGS     = @LDFLAGS@ @LIBS@ @X_LIBS@ @X_EXTRA_LIBS@
++ifeq (,$(findstring nostrip,$(DEB_BUILD_OPTIONS)))
+ STRIP       = @STRIP@
++else
++STRIP=/bin/true
++endif
+
+ TARGETS     = rdesktop @RDP2VNCTARGET@
+ VNCINC      = @VNCINC@

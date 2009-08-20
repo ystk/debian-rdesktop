@@ -1,0 +1,24 @@
+#! /bin/sh -e
+## 80_config.dpatch by Mike Hommey <glandium@debian.org>
+## Dumbed down for rdesktop by Patrick Calhoun <phineas@ou.edu>
+##
+## All lines beginning with `## DP:' are a description of the patch.
+## DP: Use config.guess and config.sub from autotools-dev
+
+dpatch_patch ()
+{
+	for file in config.guess config.sub; do
+		sed -i '2!b;/^#/ i\exec "/usr/share/misc/'$file'" "$@"' $file
+	done
+}
+
+dpatch_unpatch ()
+{
+	for file in config.guess config.sub; do
+		sed -i '2!b;/^exec "/ d' $file
+	done
+}
+
+DPATCH_LIB_NO_DEFAULT=1
+
+. /usr/share/dpatch/dpatch.lib.sh

@@ -1,0 +1,2 @@
+version=3
+http://www.rdesktop.org/ .*/rdesktop-([\d\.]+)\.tar\.gz.*

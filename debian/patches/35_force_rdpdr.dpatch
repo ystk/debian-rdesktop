@@ -1,0 +1,31 @@
+#! /bin/sh /usr/share/dpatch/dpatch-run
+## force_rdpdr.dpatch by Patrick Calhoun <phineas@ou.edu>
+## (Original patch by Sameer Naik)
+## 
+## All lines beginning with `## DP:' are a description of the patch.
+## DP: Initializes the rdpdr channel whether or not any devices are being
+## DP: redirected. As a result of this patch audio playback works when connected
+## DP: to a vista (_w SP1) machine using rdesktop client.
+
+@DPATCH@
+diff -urNad rdesktop-1.6.0~/rdpdr.c rdesktop-1.6.0/rdpdr.c
+--- rdesktop-1.6.0~/rdpdr.c	2008-02-14 05:37:17.000000000 -0600
++++ rdesktop-1.6.0/rdpdr.c	2009-08-19 14:50:35.000000000 -0500
+@@ -841,13 +841,10 @@
+ RD_BOOL
+ rdpdr_init()
+ {
+-	if (g_num_devices > 0)
+-	{
+-		rdpdr_channel =
+-			channel_register("rdpdr",
+-					 CHANNEL_OPTION_INITIALIZED | CHANNEL_OPTION_COMPRESS_RDP,
+-					 rdpdr_process);
+-	}
++	rdpdr_channel =
++		channel_register("rdpdr",
++				 CHANNEL_OPTION_INITIALIZED | CHANNEL_OPTION_COMPRESS_RDP,
++				 rdpdr_process);
+ 
+ 	return (rdpdr_channel != NULL);
+ }
