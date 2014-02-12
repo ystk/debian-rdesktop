@@ -2,15 +2,15 @@ Source: rdesktop
 Section: x11
 Priority: optional
 Maintainer: Laszlo Boszormenyi (GCS) <gcs@debian.hu>
-Build-Depends: debhelper (>= 6.0.0), dpatch (>= 2.0.9), pkg-config, autotools-dev, libasound2-dev, libxt-dev, libx11-dev, libssl-dev
-Standards-Version: 3.8.2
+Build-Depends: debhelper (>= 6.0.0), pkg-config, autoconf, automake, autotools-dev, libasound2-dev, libxt-dev, libx11-dev, libssl-dev, libxrandr-dev, libpcsclite-dev
+Standards-Version: 3.9.2
 
 Package: rdesktop
 Architecture: any
-Depends: ${shlibs:Depends}
-Description: RDP client for Windows NT/2000 Terminal Server
- rdesktop is an open source client for Windows NT/2000 Terminal Server, capable
- of natively speaking its Remote Desktop Protocol (RDP) in order to present
- the user's NT/2000 desktop. Unlike Citrix ICA, no server extensions are
- required.
-
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Suggests: pcscd
+Description: RDP client for Windows NT/2000 Terminal Server and Windows Servers
+ rdesktop is an open source client for Windows NT/2000 Terminal Server and
+ Windows Server 2003/2008. Capable of natively speaking its Remote Desktop
+ Protocol (RDP) in order to present the user's Windows desktop. Unlike Citrix
+ ICA, no server extensions are required.

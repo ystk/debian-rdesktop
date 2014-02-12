@@ -1,11 +1,12 @@
 /* -*- c-basic-offset: 8 -*-
    rdesktop: A Remote Desktop Protocol client.
    RDP licensing negotiation
-   Copyright (C) Matthew Chapman 1999-2007
+   Copyright (C) Matthew Chapman <matthewc.unsw.edu.au> 1999-2008
+   Copyright (C) Thomas Uhle <thomas.uhle@mailbox.tu-dresden.de> 2011
 
-   This program is free software; you can redistribute it and/or modify
+   This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
-   the Free Software Foundation; either version 2 of the License, or
+   the Free Software Foundation, either version 3 of the License, or
    (at your option) any later version.
 
    This program is distributed in the hope that it will be useful,
@@ -14,15 +15,15 @@
    GNU General Public License for more details.
 
    You should have received a copy of the GNU General Public License
-   along with this program; if not, write to the Free Software
-   Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
 #include "rdesktop.h"
 #include "ssl.h"
 
-extern char g_username[64];
+extern char *g_username;
 extern char g_hostname[16];
+extern RD_BOOL g_use_rdp5;
 
 static uint8 g_licence_key[16];
 static uint8 g_licence_sign_key[16];
@@ -61,14 +62,14 @@ licence_present(uint8 * client_random, uint8 * rsa_data,
 {
 	uint32 sec_flags = SEC_LICENCE_NEG;
 	uint16 length =
-		16 + SEC_RANDOM_SIZE + SEC_MODULUS_SIZE + SEC_PADDING_SIZE +
+		24 + SEC_RANDOM_SIZE + SEC_MODULUS_SIZE + SEC_PADDING_SIZE +
 		licence_size + LICENCE_HWID_SIZE + LICENCE_SIGNATURE_SIZE;
 	STREAM s;
 
-	s = sec_init(sec_flags, length + 4);
+	s = sec_init(sec_flags, length + 2);
 
 	out_uint8(s, LICENCE_TAG_PRESENT);
-	out_uint8(s, 2);	/* version */
+	out_uint8(s, (g_use_rdp5? 3 : 2));	/* version */
 	out_uint16_le(s, length);
 
 	out_uint32_le(s, 1);
@@ -76,7 +77,7 @@ licence_present(uint8 * client_random, uint8 * rsa_data,
 	out_uint16_le(s, 0x0201);
 
 	out_uint8p(s, client_random, SEC_RANDOM_SIZE);
-	out_uint16(s, 0);
+	out_uint16_le(s, 2);
 	out_uint16_le(s, (SEC_MODULUS_SIZE + SEC_PADDING_SIZE));
 	out_uint8p(s, rsa_data, SEC_MODULUS_SIZE);
 	out_uint8s(s, SEC_PADDING_SIZE);
@@ -102,13 +103,15 @@ licence_send_request(uint8 * client_random, uint8 * rsa_data, char *user, char *
 	uint32 sec_flags = SEC_LICENCE_NEG;
 	uint16 userlen = strlen(user) + 1;
 	uint16 hostlen = strlen(host) + 1;
-	uint16 length = 128 + userlen + hostlen;
+	uint16 length = 
+		24 + SEC_RANDOM_SIZE + SEC_MODULUS_SIZE + SEC_PADDING_SIZE + 
+		userlen + hostlen;
 	STREAM s;
 
 	s = sec_init(sec_flags, length + 2);
 
 	out_uint8(s, LICENCE_TAG_REQUEST);
-	out_uint8(s, 2);	/* version */
+	out_uint8(s, (g_use_rdp5? 3 : 2));	/* version */
 	out_uint16_le(s, length);
 
 	out_uint32_le(s, 1);
@@ -116,7 +119,7 @@ licence_send_request(uint8 * client_random, uint8 * rsa_data, char *user, char *
 	out_uint16_le(s, 0xff01);
 
 	out_uint8p(s, client_random, SEC_RANDOM_SIZE);
-	out_uint16(s, 0);
+	out_uint16_le(s, 2);
 	out_uint16_le(s, (SEC_MODULUS_SIZE + SEC_PADDING_SIZE));
 	out_uint8p(s, rsa_data, SEC_MODULUS_SIZE);
 	out_uint8s(s, SEC_PADDING_SIZE);
@@ -164,11 +167,18 @@ licence_process_demand(STREAM s)
 		ssl_rc4_set_key(&crypt_key, g_licence_key, 16);
 		ssl_rc4_crypt(&crypt_key, hwid, hwid, sizeof(hwid));
 
+#if WITH_DEBUG
+		DEBUG(("Sending licensing PDU (message type 0x%02x)\n", LICENCE_TAG_PRESENT));
+#endif
 		licence_present(null_data, null_data, licence_data, licence_size, hwid, signature);
+
 		xfree(licence_data);
 		return;
 	}
 
+#if WITH_DEBUG
+	DEBUG(("Sending licensing PDU (message type 0x%02x)\n", LICENCE_TAG_REQUEST));
+#endif
 	licence_send_request(null_data, null_data, g_username, g_hostname);
 }
 
@@ -183,7 +193,7 @@ licence_send_authresp(uint8 * token, uint8 * crypt_hwid, uint8 * signature)
 	s = sec_init(sec_flags, length + 2);
 
 	out_uint8(s, LICENCE_TAG_AUTHRESP);
-	out_uint8(s, 2);	/* version */
+	out_uint8(s, (g_use_rdp5? 3 : 2));	/* version */
 	out_uint16_le(s, length);
 
 	out_uint16_le(s, 1);
@@ -250,6 +260,9 @@ licence_process_authreq(STREAM s)
 	ssl_rc4_set_key(&crypt_key, g_licence_key, 16);
 	ssl_rc4_crypt(&crypt_key, hwid, crypt_hwid, LICENCE_HWID_SIZE);
 
+#if WITH_DEBUG
+	DEBUG(("Sending licensing PDU (message type 0x%02x)\n", LICENCE_TAG_AUTHRESP));
+#endif
 	licence_send_authresp(out_token, crypt_hwid, out_sig);
 }
 
@@ -301,6 +314,10 @@ licence_process(STREAM s)
 	in_uint8(s, tag);
 	in_uint8s(s, 3);	/* version, length */
 
+#if WITH_DEBUG
+	DEBUG(("Received licensing PDU (message type 0x%02x)\n", tag));
+#endif
+
 	switch (tag)
 	{
 		case LICENCE_TAG_DEMAND:
@@ -312,14 +329,14 @@ licence_process(STREAM s)
 			break;
 
 		case LICENCE_TAG_ISSUE:
+		case LICENCE_TAG_REISSUE:
 			licence_process_issue(s);
 			break;
 
-		case LICENCE_TAG_REISSUE:
 		case LICENCE_TAG_RESULT:
 			break;
 
 		default:
-			unimpl("licence tag 0x%x\n", tag);
+			unimpl("licence tag 0x%02x\n", tag);
 	}
 }

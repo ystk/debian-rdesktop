@@ -4,38 +4,36 @@
 # Uncomment this to turn on verbose mode.
 #export DH_VERBOSE=1
 
-include /usr/share/dpatch/dpatch.make
-
 # These are used for cross-compiling and for saving the configure script
 # from having to guess our platform (since we know it already)
 DEB_HOST_GNU_TYPE   ?= $(shell dpkg-architecture -qDEB_HOST_GNU_TYPE)
 DEB_BUILD_GNU_TYPE  ?= $(shell dpkg-architecture -qDEB_BUILD_GNU_TYPE)
 
+CFLAGS = `dpkg-buildflags --get CFLAGS`
+CFLAGS += -Wall
 
-CFLAGS = -Wall -g
+LDFLAGS_DEF += `dpkg-buildflags --get LDFLAGS`
+CPPFLAGS_DEF = `dpkg-buildflags --get CPPFLAGS`
 
-ifneq (,$(findstring noopt,$(DEB_BUILD_OPTIONS)))
-	CFLAGS += -O0
-else
-	CFLAGS += -O2
-endif
-
-config.status: configure
+config.status: configure.ac
 	dh_testdir
+	./bootstrap
 
-	CFLAGS="$(CFLAGS)" ./configure --host=$(DEB_HOST_GNU_TYPE) --build=$(DEB_BUILD_GNU_TYPE) --prefix=/usr --mandir=\$${prefix}/share/man --infodir=\$${prefix}/share/info --with-ipv6 --with-sound=alsa
+	CFLAGS="$(CFLAGS)" CPPFLAGS="$(CPPFLAGS_DEF)" LDFLAGS="$(LDFLAGS_DEF)" ./configure --host=$(DEB_HOST_GNU_TYPE) --build=$(DEB_BUILD_GNU_TYPE) --prefix=/usr --mandir=\$${prefix}/share/man --infodir=\$${prefix}/share/info --with-ipv6 --with-sound=alsa --enable-smartcard
 
+build-arch: build-stamp
+build-indep: build-stamp
 
-build: build-stamp
+build: build-arch build-indep
 
-build-stamp: patch-stamp config.status
+build-stamp: config.status
 	dh_testdir
 
 	$(MAKE)
 
 	touch build-stamp
 
-clean: unpatch
+clean:
 	dh_testdir
 	dh_testroot
 	rm -f build-stamp 
@@ -49,6 +47,7 @@ clean: unpatch
 #	cp -f /usr/share/misc/config.guess config.guess
 #endif
 
+	rm -f config.log aclocal.m4 configure
 	dh_clean 
 
 install: build

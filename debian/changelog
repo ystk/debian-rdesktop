@@ -1,3 +1,41 @@
+rdesktop (1.7.1-1) unstable; urgency=low
+
+  * New upstream release, update patches to apply clean.
+  * Enable smartcard support (closes: #546713).
+  * Enable RandR extension support.
+
+ -- Laszlo Boszormenyi (GCS) <gcs@debian.hu>  Wed, 08 Feb 2012 09:38:40 +0000
+
+rdesktop (1.7.0-2) unstable; urgency=low
+
+  * Switch to 3.0 (quilt) source format, remove dpatch build dependency.
+    Update 90_update_smartcard_api.dpatch to apply clean, remove
+    80_config.dpatch as it's not needed anymore.
+  * Enable hardened build flags, patch from Moritz Muehlenhoff
+    <jmm@debian.org> (closes: #653498).
+  * Update packaging bits.
+  * Mention Windows Server support in package description (closes: #623777).
+
+ -- Laszlo Boszormenyi (GCS) <gcs@debian.hu>  Tue, 03 Jan 2012 19:08:18 +0100
+
+rdesktop (1.7.0-1) unstable; urgency=high
+
+  * New upstream release, fixing CVE-2010-1595 (closes: #623552).
+  * Remove 15_lp192218.dpatch , 16_lp667275.dpatch and 35_force_rdpdr.dpatch
+    this release contains them; update other patches to match this release.
+
+ -- Laszlo Boszormenyi (GCS) <gcs@debian.hu>  Thu, 21 Apr 2011 19:43:08 +0200
+
+rdesktop (1.6.0-4) unstable; urgency=low
+
+  * Fix 64 bit crashes due to incorrectly sized Xorg properties
+    (closes: #617731).
+  * Add missing '-r clipboard' option to manpage (closes: #506893).
+  * Add viewport patch from Ubuntu.
+  * Fix minor packaging issues.
+
+ -- Laszlo Boszormenyi (GCS) <gcs@debian.hu>  Sat, 26 Mar 2011 13:11:06 +0100
+
 rdesktop (1.6.0-3) unstable; urgency=low
 
   [ Patrick Calhoun ]

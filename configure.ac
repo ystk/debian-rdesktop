@@ -1,6 +1,8 @@
-AC_INIT(rdesktop, 1.6.0)
+AC_INIT(rdesktop, 1.7.1)
 
 AC_CONFIG_SRCDIR([rdesktop.c])
+
+AC_CANONICAL_HOST
 
 AC_PROG_CC
 if test "$GCC" = yes; then
@@ -25,7 +27,7 @@ if test "$no_x" = "yes"; then
     exit 1
 fi
     
-AC_PATH_PROG(PKG_CONFIG, pkg-config)
+AC_PATH_TOOL(PKG_CONFIG, pkg-config)
 
 AC_SEARCH_LIBS(socket, socket)
 AC_SEARCH_LIBS(inet_aton, resolv)
@@ -36,6 +38,7 @@ AC_CHECK_HEADER(sys/filio.h, AC_DEFINE(HAVE_SYS_FILIO_H))
 AC_CHECK_HEADER(sys/strtio.h, AC_DEFINE(HAVE_SYS_STRTIO_H))
 AC_CHECK_HEADER(locale.h, AC_DEFINE(HAVE_LOCALE_H))
 AC_CHECK_HEADER(langinfo.h, AC_DEFINE(HAVE_LANGINFO_H))
+AC_CHECK_HEADER(sysexits.h, AC_DEFINE(HAVE_SYSEXITS_H))
 
 AC_CHECK_TOOL(STRIP, strip, :)
 
@@ -47,8 +50,6 @@ m4_ifdef([PKG_CHECK_MODULES], [], [
 			$4
 		])
 ])
-
-rpath=""
 
 #
 # OpenSSL detection borrowed from stunnel
@@ -97,13 +98,37 @@ dnl Add OpenSSL includes and libraries
 CFLAGS="$CFLAGS -I$ssldir/include"
 AC_ARG_ENABLE(static-openssl, 
              [  --enable-static-openssl link OpenSSL statically],
-             [ 
-LIBS="$LIBS $ssldir/lib/libcrypto.a" 
-             ],
-             [ 
-LIBS="$LIBS -L$ssldir/lib -lcrypto" 
-rpath="$rpath:$ssldir/lib"
-             ])
+             [static_openssl=yes], 
+             [static_openssl=no])
+if test x"$static_openssl" = "xyes"; then
+    # OpenSSL generally relies on libz
+    AC_SEARCH_LIBS(deflate, z)
+    LIBS="-L$ssldir/lib -L$ssldir/lib64 -Wl,-Bstatic -lcrypto -Wl,-Bdynamic $LIBS"
+else
+    LIBS="-L$ssldir/lib -L$ssldir/lib64 -lcrypto $LIBS"
+
+    #
+    # target-specific stuff
+    #
+    case "$host" in
+    *-*-solaris*)
+        LDFLAGS="$LDFLAGS -R$ssldir/lib"
+        ;;
+    *-dec-osf*)
+        LDFLAGS="$LDFLAGS -Wl,-rpath,$ssldir/lib"
+        ;;
+    esac
+fi
+
+# xrandr
+if test -n "$PKG_CONFIG"; then
+    PKG_CHECK_MODULES(XRANDR, xrandr, [HAVE_XRANDR=1], [HAVE_XRANDR=0])
+fi
+if test x"$HAVE_XRANDR" = "x1"; then
+    CFLAGS="$CFLAGS $XRANDR_CFLAGS"
+    LIBS="$LIBS $XRANDR_LIBS"
+    AC_DEFINE(HAVE_XRANDR)
+fi
 
 AC_ARG_ENABLE(smartcard, 
              [  --enable-smartcard	  Enables smart-card support.
@@ -234,8 +259,8 @@ if test -n "$PKG_CONFIG"; then
         if test x"$static_libsamplerate" = "xyes"; then
             _libsamplerate_libdir=`$PKG_CONFIG --errors-to-stdout --variable=libdir samplerate`
             LIBSAMPLERATE_LIBS="$_libsamplerate_libdir""/libsamplerate.a"
+            LIBSAMPLERATE_LIBS="$LIBSAMPLERATE_LIBS -lm"
         fi
-        LIBSAMPLERATE_LIBS="$LIBSAMPLERATE_LIBS -lm"
     fi
 fi
 
@@ -514,11 +539,11 @@ AC_DEFUN([TYPE_SOCKLEN_T],
 [
    AC_CHECK_TYPE([socklen_t], ,[
       AC_MSG_CHECKING([for socklen_t equivalent])
-      AC_CACHE_VAL([socklen_t_equiv],
+      AC_CACHE_VAL([socklen_t_cv_equiv],
       [
          # Systems have either "struct sockaddr *" or
          # "void *" as the second argument to getpeername
-         socklen_t_equiv=
+         socklen_t_cv_equiv=
          for arg2 in "struct sockaddr" void; do
             for t in int size_t unsigned long "unsigned long"; do
                AC_TRY_COMPILE([
@@ -530,18 +555,18 @@ AC_DEFUN([TYPE_SOCKLEN_T],
                   $t len;
                   getpeername(0,0,&len);
                ],[
-                  socklen_t_equiv="$t"
+                  socklen_t_cv_equiv="$t"
                   break
                ])
             done
          done
 
-         if test "x$socklen_t_equiv" = x; then
+         if test "x$socklen_t_cv_equiv" = x; then
             AC_MSG_ERROR([Cannot find a type to use in place of socklen_t])
          fi
       ])
-      AC_MSG_RESULT($socklen_t_equiv)
-      AC_DEFINE_UNQUOTED(socklen_t, $socklen_t_equiv,
+      AC_MSG_RESULT($socklen_t_cv_equiv)
+      AC_DEFINE_UNQUOTED(socklen_t, $socklen_t_cv_equiv,
 			[type to use in place of socklen_t if not defined])],
       [#include <sys/types.h>
 #include <sys/socket.h>])
@@ -883,25 +908,15 @@ AC_ARG_WITH(debug-smartcard,
 #
 # target-specific stuff
 #
-# strip leading colon from rpath
-rpath=`echo $rpath |sed 's/^://'`
-AC_CANONICAL_HOST
 case "$host" in
-*-*-solaris*)
-    LDFLAGS="$LDFLAGS -R$rpath"
-    ;;
-*-dec-osf*)
-    LDFLAGS="$LDFLAGS -Wl,-rpath,$rpath"
-    ;;
 *-*-hpux*)
     CFLAGS="$CFLAGS -D_XOPEN_SOURCE_EXTENDED"
     ;;
 *-*-irix6.5*)
-    LIBS="$LIBS -L$ssldir/lib32 -lcrypto"
+    LIBS="-L$ssldir/lib32 $LIBS"
     CFLAGS="$CFLAGS -D__SGI_IRIX__"
     ;;
 esac
-
 
 AC_OUTPUT(Makefile)
 

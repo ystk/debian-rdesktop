@@ -16,7 +16,8 @@
 # 5 -> General code
 # 8 -> Fix for some architectures support
 #
+01_paging.dpatch
+20_update_manpage.dpatch
 32_it_keymap.dpatch
-35_force_rdpdr.dpatch
-80_config.dpatch
 80_handle_nostrip_option.dpatch
+90-snprintf-format-fix.patch
