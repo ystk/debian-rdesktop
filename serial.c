@@ -1,11 +1,11 @@
 /* -*- c-basic-offset: 8 -*-
    rdesktop: A Remote Desktop Protocol client.
 
-   Copyright (C) Matthew Chapman 1999-2007
+   Copyright (C) Matthew Chapman <matthewc.unsw.edu.au> 1999-2008
 
-   This program is free software; you can redistribute it and/or modify
+   This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
-   the Free Software Foundation; either version 2 of the License, or
+   the Free Software Foundation, either version 3 of the License, or
    (at your option) any later version.
 
    This program is distributed in the hope that it will be useful,
@@ -14,8 +14,7 @@
    GNU General Public License for more details.
 
    You should have received a copy of the GNU General Public License
-   along with this program; if not, write to the Free Software
-   Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 #include <unistd.h>
 #include <fcntl.h>
@@ -271,9 +270,8 @@ get_termios(SERIAL_DEVICE * pser_inf, RD_NTHANDLE serial_fd)
 
 	pser_inf->stop_bits = (ptermios->c_cflag & CSTOPB) ? STOP_BITS_2 : STOP_BITS_1;
 	pser_inf->parity =
-		(ptermios->
-		 c_cflag & PARENB) ? ((ptermios->
-				       c_cflag & PARODD) ? ODD_PARITY : EVEN_PARITY) : NO_PARITY;
+		(ptermios->c_cflag & PARENB) ? ((ptermios->c_cflag & PARODD) ? ODD_PARITY :
+						EVEN_PARITY) : NO_PARITY;
 	switch (ptermios->c_cflag & CSIZE)
 	{
 		case CS5:
@@ -701,7 +699,7 @@ serial_write(RD_NTHANDLE handle, uint8 * data, uint32 length, uint32 offset, uin
 static RD_NTSTATUS
 serial_device_control(RD_NTHANDLE handle, uint32 request, STREAM in, STREAM out)
 {
-	int flush_mask, purge_mask;
+	int purge_mask;
 	uint32 result, modemstate;
 	uint8 immediate;
 	SERIAL_DEVICE *pser_inf;
@@ -896,13 +894,13 @@ serial_device_control(RD_NTHANDLE handle, uint32 request, STREAM in, STREAM out)
 		case SERIAL_PURGE:
 			in_uint32(in, purge_mask);
 			DEBUG_SERIAL(("serial_ioctl -> SERIAL_PURGE purge_mask %X\n", purge_mask));
-			flush_mask = 0;
-			if (purge_mask & SERIAL_PURGE_TXCLEAR)
-				flush_mask |= TCOFLUSH;
-			if (purge_mask & SERIAL_PURGE_RXCLEAR)
-				flush_mask |= TCIFLUSH;
-			if (flush_mask != 0)
-				tcflush(handle, flush_mask);
+			if ((purge_mask & SERIAL_PURGE_TXCLEAR)
+			    && (purge_mask & SERIAL_PURGE_RXCLEAR))
+				tcflush(handle, TCIOFLUSH);
+			else if (purge_mask & SERIAL_PURGE_TXCLEAR)
+				tcflush(handle, TCOFLUSH);
+			else if (purge_mask & SERIAL_PURGE_RXCLEAR)
+				tcflush(handle, TCIFLUSH);
 			if (purge_mask & SERIAL_PURGE_TXABORT)
 				rdpdr_abort_io(handle, 4, RD_STATUS_CANCELLED);
 			if (purge_mask & SERIAL_PURGE_RXABORT)
