@@ -1,14 +1,13 @@
-#! /bin/sh /usr/share/dpatch/dpatch-run
-## 01_paging.dpatch by Adilson Oliveira <adilson@ubuntu.com>
-##
-## All lines beginning with `## DP:' are a description of the patch.
-## DP: Add viewport mode, suitable for small screens.
+Description: <short summary of the patch>
+ .
+Author: Laszlo Boszormenyi (GCS) <gcs@debian.org>
+Last-Update: 2014-08-31
 
-@DPATCH@
-diff -Nur rdesktop-1.7.0.orig/proto.h rdesktop-1.7.0/proto.h
---- rdesktop-1.7.0.orig/proto.h	2011-04-18 13:21:57.000000000 +0200
-+++ rdesktop-1.7.0/proto.h	2011-04-21 21:04:40.702453001 +0200
-@@ -236,7 +236,7 @@
+---
+
+--- rdesktop-1.8.2.orig/proto.h
++++ rdesktop-1.8.2/proto.h
+@@ -267,7 +267,7 @@ RD_BOOL get_key_state(unsigned int state
  RD_BOOL ui_init(void);
  void ui_init_connection(void);
  void ui_deinit(void);
@@ -16,11 +15,10 @@ diff -Nur rdesktop-1.7.0.orig/proto.h rdesktop-1.7.0/proto.h
 +RD_BOOL ui_create_window(RD_BOOL ToggleFullscreen);
  void ui_resize_window(void);
  void ui_destroy_window(void);
- void xwin_toggle_fullscreen(void);
-diff -Nur rdesktop-1.7.0.orig/rdesktop.c rdesktop-1.7.0/rdesktop.c
---- rdesktop-1.7.0.orig/rdesktop.c	2011-04-18 13:21:57.000000000 +0200
-+++ rdesktop-1.7.0/rdesktop.c	2011-04-21 21:04:40.703453001 +0200
-@@ -119,6 +119,13 @@
+ RD_BOOL ui_have_window(void);
+--- rdesktop-1.8.2.orig/rdesktop.c
++++ rdesktop-1.8.2/rdesktop.c
+@@ -136,6 +136,13 @@ RD_BOOL g_reconnect_loop = False;
  uint8 g_client_random[SEC_RANDOM_SIZE];
  RD_BOOL g_pending_resize = False;
  
@@ -34,7 +32,7 @@ diff -Nur rdesktop-1.7.0.orig/rdesktop.c rdesktop-1.7.0/rdesktop.c
  #ifdef WITH_RDPSND
  RD_BOOL g_rdpsnd = False;
  #endif
-@@ -138,6 +145,7 @@
+@@ -160,6 +167,7 @@ void
  rdp2vnc_connect(char *server, uint32 flags, char *domain, char *password,
  		char *shell, char *directory);
  #endif
@@ -42,7 +40,7 @@ diff -Nur rdesktop-1.7.0.orig/rdesktop.c rdesktop-1.7.0/rdesktop.c
  /* Display usage information */
  static void
  usage(char *program)
-@@ -624,6 +632,8 @@
+@@ -692,6 +700,8 @@ main(int argc, char *argv[])
  					g_pos |= (*p == '-') ? 4 : 1;
  					g_ypos = strtol(p, NULL, 10);
  				}
@@ -51,19 +49,18 @@ diff -Nur rdesktop-1.7.0.orig/rdesktop.c rdesktop-1.7.0/rdesktop.c
  
  				break;
  
-@@ -1016,7 +1026,7 @@
- 		memset(password, 0, sizeof(password));
- 
- 		if (!g_redirect)
--			if (!ui_create_window())
-+			if (!ui_create_window(False))
- 				return EX_OSERR;
- 
- 		g_redirect = False;
-diff -Nur rdesktop-1.7.0.orig/xwin.c rdesktop-1.7.0/xwin.c
---- rdesktop-1.7.0.orig/xwin.c	2011-04-18 13:21:57.000000000 +0200
-+++ rdesktop-1.7.0/xwin.c	2011-04-21 21:04:40.704453001 +0200
-@@ -55,7 +55,11 @@
+@@ -1763,7 +1773,7 @@ rd_create_ui()
+ 	/* only create a window if we dont have one intialized */
+ 	if (!ui_have_window())
+ 	{
+-		if (!ui_create_window())
++		if (!ui_create_window(False))
+ 			exit(EX_OSERR);
+ 	}
+ }
+--- rdesktop-1.8.2.orig/xwin.c
++++ rdesktop-1.8.2/xwin.c
+@@ -57,7 +57,11 @@ Time g_last_gesturetime;
  static int g_x_socket;
  static Screen *g_screen;
  Window g_wnd;
@@ -76,7 +73,7 @@ diff -Nur rdesktop-1.7.0.orig/xwin.c rdesktop-1.7.0/xwin.c
  /* SeamlessRDP support */
  typedef struct _seamless_group
  {
-@@ -140,6 +144,27 @@
+@@ -142,6 +146,27 @@ static RD_BOOL g_compatible_arch;
     ('host' is the machine running rdesktop; the host simply memcpy's
      so its endianess doesn't matter)
   */
@@ -104,7 +101,7 @@ diff -Nur rdesktop-1.7.0.orig/xwin.c rdesktop-1.7.0/xwin.c
  static RD_BOOL g_no_translate_image = False;
  
  /* endianness */
-@@ -530,7 +555,7 @@
+@@ -532,7 +557,7 @@ mwm_hide_decorations(Window wnd)
  		return;
  	}
  
@@ -113,7 +110,7 @@ diff -Nur rdesktop-1.7.0.orig/xwin.c rdesktop-1.7.0/xwin.c
  			(unsigned char *) &motif_hints, PROP_MOTIF_WM_HINTS_ELEMENTS);
  
  }
-@@ -1994,7 +2019,7 @@
+@@ -2003,7 +2028,7 @@ get_input_mask(long *input_mask)
  }
  
  RD_BOOL
@@ -122,7 +119,7 @@ diff -Nur rdesktop-1.7.0.orig/xwin.c rdesktop-1.7.0/xwin.c
  {
  	uint8 null_pointer_mask[1] = { 0x80 };
  	uint8 null_pointer_data[24] = { 0x00 };
-@@ -2005,6 +2030,7 @@
+@@ -2014,6 +2039,7 @@ ui_create_window(void)
  	int wndwidth, wndheight;
  	long input_mask, ic_input_mask;
  	XEvent xevent;
@@ -130,7 +127,7 @@ diff -Nur rdesktop-1.7.0.orig/xwin.c rdesktop-1.7.0/xwin.c
  
  	wndwidth = g_fullscreen ? WidthOfScreen(g_screen) : g_width;
  	wndheight = g_fullscreen ? HeightOfScreen(g_screen) : g_height;
-@@ -2039,7 +2065,75 @@
+@@ -2048,7 +2074,75 @@ ui_create_window(void)
  		XSetForeground(g_display, g_gc, BlackPixelOfScreen(g_screen));
  		XFillRectangle(g_display, g_backstore, g_gc, 0, 0, g_width, g_height);
  	}
@@ -207,7 +204,7 @@ diff -Nur rdesktop-1.7.0.orig/xwin.c rdesktop-1.7.0/xwin.c
  	XStoreName(g_display, g_wnd, g_title);
  	ewmh_set_wm_name(g_wnd, g_title);
  
-@@ -2050,7 +2144,7 @@
+@@ -2059,7 +2153,7 @@ ui_create_window(void)
  	if (classhints != NULL)
  	{
  		classhints->res_name = classhints->res_class = "rdesktop";
@@ -216,7 +213,7 @@ diff -Nur rdesktop-1.7.0.orig/xwin.c rdesktop-1.7.0/xwin.c
  		XFree(classhints);
  	}
  
-@@ -2062,7 +2156,7 @@
+@@ -2071,7 +2165,7 @@ ui_create_window(void)
  			sizehints->flags |= PPosition;
  		sizehints->min_width = sizehints->max_width = g_width;
  		sizehints->min_height = sizehints->max_height = g_height;
@@ -225,7 +222,7 @@ diff -Nur rdesktop-1.7.0.orig/xwin.c rdesktop-1.7.0/xwin.c
  		XFree(sizehints);
  	}
  
-@@ -2087,7 +2181,12 @@
+@@ -2096,7 +2190,12 @@ ui_create_window(void)
  #ifdef HAVE_XRANDR
  	XSelectInput(g_display, RootWindowOfScreen(g_screen), StructureNotifyMask);
  #endif
@@ -239,7 +236,7 @@ diff -Nur rdesktop-1.7.0.orig/xwin.c rdesktop-1.7.0/xwin.c
  
  	/* wait for VisibilityNotify */
  	do
-@@ -2157,7 +2256,14 @@
+@@ -2172,7 +2271,14 @@ ui_destroy_window(void)
  	if (g_IC != NULL)
  		XDestroyIC(g_IC);
  
@@ -255,7 +252,7 @@ diff -Nur rdesktop-1.7.0.orig/xwin.c rdesktop-1.7.0/xwin.c
  	g_wnd = 0;
  
  	if (g_backstore)
-@@ -2185,7 +2291,7 @@
+@@ -2200,7 +2306,7 @@ xwin_toggle_fullscreen(void)
  
  	ui_destroy_window();
  	g_fullscreen = !g_fullscreen;
@@ -264,7 +261,7 @@ diff -Nur rdesktop-1.7.0.orig/xwin.c rdesktop-1.7.0/xwin.c
  
  	XDefineCursor(g_display, g_wnd, g_current_cursor);
  
-@@ -2408,6 +2514,21 @@
+@@ -2431,6 +2537,21 @@ xwin_process_events(void)
  						    xevent.xmotion.y_root - g_move_y_offset);
  					break;
  				}
@@ -286,7 +283,7 @@ diff -Nur rdesktop-1.7.0.orig/xwin.c rdesktop-1.7.0/xwin.c
  
  				if (g_fullscreen && !g_focused)
  					XSetInputFocus(g_display, g_wnd, RevertToPointerRoot,
-@@ -3764,6 +3885,83 @@
+@@ -3792,6 +3913,83 @@ ui_desktop_restore(uint32 offset, int x,
  
  	XFree(image);
  }

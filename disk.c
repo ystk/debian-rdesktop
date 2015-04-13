@@ -116,6 +116,7 @@ struct dummy_statfs_t
 {
 	long f_bfree;
 	long f_bsize;
+	long f_bavail;
 	long f_blocks;
 	int f_namelen;
 	int f_namemax;
@@ -126,6 +127,7 @@ dummy_statfs(struct dummy_statfs_t *buf)
 {
 	buf->f_blocks = 262144;
 	buf->f_bfree = 131072;
+	buf->f_bavail = 131072;
 	buf->f_bsize = 512;
 	buf->f_namelen = 255;
 	buf->f_namemax = 255;
@@ -352,9 +354,10 @@ disk_create(uint32 device_id, uint32 accessmask, uint32 sharemode, uint32 create
 	flags = 0;
 	mode = S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH;
 
-	if (*filename && filename[strlen(filename) - 1] == '/')
+	if (filename && *filename && filename[strlen(filename) - 1] == '/')
 		filename[strlen(filename) - 1] = 0;
-	sprintf(path, "%s%s", g_rdpdr_device[device_id].local_path, filename);
+
+	sprintf(path, "%s%s", g_rdpdr_device[device_id].local_path, filename ? filename : "");
 
 	/* Protect against mailicous servers:
 	   somelongpath/..     not allowed
@@ -714,7 +717,7 @@ RD_NTSTATUS
 disk_set_information(RD_NTHANDLE handle, uint32 info_class, STREAM in, STREAM out)
 {
 	uint32 length, file_attributes, ft_high, ft_low;
-	char newname[PATH_MAX], fullpath[PATH_MAX];
+	char *newname, fullpath[PATH_MAX];
 	struct fileinfo *pfinfo;
 	int mode;
 	struct stat filestat;
@@ -724,6 +727,7 @@ disk_set_information(RD_NTHANDLE handle, uint32 info_class, STREAM in, STREAM ou
 
 	pfinfo = &(g_fileinfo[handle]);
 	g_notify_stamp = True;
+	newname = NULL;
 
 	switch (info_class)
 	{
@@ -813,18 +817,19 @@ disk_set_information(RD_NTHANDLE handle, uint32 info_class, STREAM in, STREAM ou
 			in_uint8s(in, 0x1a);	/* unknown */
 			in_uint32_le(in, length);
 
-			if (length && (length / 2) < 256)
-			{
-				rdp_in_unistr(in, newname, sizeof(newname), length);
-				convert_to_unix_filename(newname);
-			}
-			else
-			{
+			if (length && (length / 2) >= 256)
 				return RD_STATUS_INVALID_PARAMETER;
-			}
+
+			rdp_in_unistr(in, length, &newname, &length);
+			if (newname == NULL)
+				return RD_STATUS_INVALID_PARAMETER;
+
+			convert_to_unix_filename(newname);
 
 			sprintf(fullpath, "%s%s", g_rdpdr_device[pfinfo->device_id].local_path,
 				newname);
+
+			free(newname);
 
 			if (rename(pfinfo->path, fullpath) != 0)
 			{
@@ -1137,7 +1142,7 @@ disk_query_volume_information(RD_NTHANDLE handle, uint32 info_class, STREAM out)
 
 			out_uint32_le(out, stat_fs.f_blocks);	/* Total allocation units low */
 			out_uint32_le(out, 0);	/* Total allocation units high */
-			out_uint32_le(out, stat_fs.f_blocks);	/* Caller allocation units low */
+			out_uint32_le(out, stat_fs.f_bavail);	/* Caller allocation units low */
 			out_uint32_le(out, 0);	/* Caller allocation units high */
 			out_uint32_le(out, stat_fs.f_bfree);	/* Available allocation units */
 			out_uint32_le(out, 0);	/* Available allowcation units */
@@ -1192,7 +1197,7 @@ disk_query_directory(RD_NTHANDLE handle, uint32 info_class, char *pattern, STREA
 		case FileNamesInformation:
 
 			/* If a search pattern is received, remember this pattern, and restart search */
-			if (pattern[0] != 0)
+			if (pattern != NULL && pattern[0] != 0)
 			{
 				strncpy(pfinfo->pattern, 1 + strrchr(pattern, '/'), PATH_MAX - 1);
 				rewinddir(pdir);

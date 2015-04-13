@@ -4,6 +4,7 @@
    Copyright (C) Matthew Chapman <matthewc.unsw.edu.au> 1999-2008
    Copyright 2007-2008 Pierre Ossman <ossman@cendio.se> for Cendio AB
    Copyright 2002-2011 Peter Astrand <astrand@cendio.se> for Cendio AB
+   Copyright 2012-2013 Henrik Andersson <hean01@cendio.se> for Cendio AB
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -45,6 +46,7 @@ extern RD_BOOL g_grab_keyboard;
 extern RD_BOOL g_hide_decorations;
 extern RD_BOOL g_pending_resize;
 extern char g_title[];
+extern char g_seamless_spawn_cmd[];
 /* Color depth of the RDP session.
    As of RDP 5.1, it may be 8, 15, 16 or 24. */
 extern int g_server_depth;
@@ -572,14 +574,14 @@ sw_wait_configurenotify(Window wnd, unsigned long serial)
 	XEvent xevent;
 	sw_configurenotify_context context;
 	struct timeval now;
-	struct timeval nextsecond;
+	struct timeval future;
 	RD_BOOL got = False;
 
 	context.window = wnd;
 	context.serial = serial;
 
-	gettimeofday(&nextsecond, NULL);
-	nextsecond.tv_sec += 1;
+	gettimeofday(&future, NULL);
+	future.tv_usec += 500000;
 
 	do
 	{
@@ -591,7 +593,7 @@ sw_wait_configurenotify(Window wnd, unsigned long serial)
 		usleep(100000);
 		gettimeofday(&now, NULL);
 	}
-	while (timercmp(&now, &nextsecond, <));
+	while (timercmp(&now, &future, <));
 
 	if (!got)
 	{
@@ -773,7 +775,14 @@ seamless_restack_test()
 
 	/* Destroy windows */
 	for (i = 0; i < 3; i++)
+	{
 		XDestroyWindow(g_display, wnds[i]);
+		do
+		{
+			XWindowEvent(g_display, wnds[i], StructureNotifyMask, &xevent);
+		}
+		while (xevent.type != DestroyNotify);
+	}
 }
 
 #define SPLITCOLOUR15(colour, rv) \
@@ -2151,6 +2160,12 @@ ui_resize_window()
 	}
 }
 
+RD_BOOL
+ui_have_window()
+{
+	return g_wnd ? True : False;
+}
+
 void
 ui_destroy_window(void)
 {
@@ -2268,6 +2283,14 @@ handle_button_event(XEvent xevent, RD_BOOL down)
 				return;
 			}
 		}
+	}
+
+	/* Ignore mouse scroll button release event which will be handled as an additional
+	 * scrolldown event on the Windows side.
+	 */
+	if (!down && (button == MOUSE_FLAG_BUTTON4 || button == MOUSE_FLAG_BUTTON5))
+	{
+		return;
 	}
 
 	if (xevent.xmotion.window == g_wnd)
@@ -2661,6 +2684,9 @@ ui_select(int rdp_socket)
 		rdpdr_add_fds(&n, &rfds, &wfds, &tv, &s_timeout);
 		seamless_select_timeout(&tv);
 
+		/* add ctrl slaves handles */
+		ctrl_add_fds(&n, &rfds);
+
 		n++;
 
 		switch (select(n, &rfds, &wfds, NULL, &tv))
@@ -2684,6 +2710,8 @@ ui_select(int rdp_socket)
 #endif
 
 		rdpdr_check_fds(&rfds, &wfds, (RD_BOOL) False);
+
+		ctrl_check_fds(&rfds, &wfds);
 
 		if (FD_ISSET(rdp_socket, &rfds))
 			return 1;
@@ -3792,6 +3820,9 @@ ui_seamless_begin(RD_BOOL hidden)
 
 	if (!hidden)
 		ui_seamless_toggle();
+
+	if (g_seamless_spawn_cmd[0])
+		seamless_send_spawn(g_seamless_spawn_cmd);
 }
 
 
@@ -4150,19 +4181,20 @@ ui_seamless_move_window(unsigned long id, int x, int y, int width, int height, u
 		/* X11 windows must be at least 1x1 */
 		return;
 
-	sw->xoffset = x;
-	sw->yoffset = y;
-	sw->width = width;
-	sw->height = height;
-
 	/* If we move the window in a maximized state, then KDE won't
 	   accept restoration */
 	switch (sw->state)
 	{
 		case SEAMLESSRDP_MINIMIZED:
 		case SEAMLESSRDP_MAXIMIZED:
+			sw_update_position(sw);
 			return;
 	}
+
+	sw->xoffset = x;
+	sw->yoffset = y;
+	sw->width = width;
+	sw->height = height;
 
 	/* FIXME: Perhaps use ewmh_net_moveresize_window instead */
 	XMoveResizeWindow(g_display, sw->wnd, sw->xoffset, sw->yoffset, sw->width, sw->height);
@@ -4175,6 +4207,7 @@ ui_seamless_restack_window(unsigned long id, unsigned long behind, unsigned long
 	seamless_window *sw;
 	XWindowChanges values;
 	unsigned long restack_serial;
+	unsigned int value_mask;
 
 	if (!g_seamless_active)
 		return;
@@ -4197,24 +4230,42 @@ ui_seamless_restack_window(unsigned long id, unsigned long behind, unsigned long
 			return;
 		}
 
-		if (!g_seamless_broken_restack)
+		values.stack_mode = Below;
+		value_mask = CWStackMode | CWSibling;
+		values.sibling = sw_behind->wnd;
+
+		/* Avoid that topmost windows references non-topmost
+		   windows, and vice versa. */
+		if (ewmh_is_window_above(sw->wnd))
 		{
-			values.stack_mode = Below;
-			values.sibling = sw_behind->wnd;
-			restack_serial = XNextRequest(g_display);
-			XReconfigureWMWindow(g_display, sw->wnd, DefaultScreen(g_display),
-					     CWStackMode | CWSibling, &values);
-			sw_wait_configurenotify(sw->wnd, restack_serial);
+			if (!ewmh_is_window_above(sw_behind->wnd))
+			{
+				/* Disallow, move to bottom of the
+				   topmost stack. */
+				values.stack_mode = Below;
+				value_mask = CWStackMode;	/* Not sibling */
+			}
+		}
+		else
+		{
+			if (ewmh_is_window_above(sw_behind->wnd))
+			{
+				/* Move to top of non-topmost
+				   stack. */
+				values.stack_mode = Above;
+				value_mask = CWStackMode;	/* Not sibling */
+			}
 		}
 	}
 	else
 	{
 		values.stack_mode = Above;
-		restack_serial = XNextRequest(g_display);
-		XReconfigureWMWindow(g_display, sw->wnd, DefaultScreen(g_display), CWStackMode,
-				     &values);
-		sw_wait_configurenotify(sw->wnd, restack_serial);
+		value_mask = CWStackMode;
 	}
+
+	restack_serial = XNextRequest(g_display);
+	XReconfigureWMWindow(g_display, sw->wnd, DefaultScreen(g_display), value_mask, &values);
+	sw_wait_configurenotify(sw->wnd, restack_serial);
 
 	sw_restack_window(sw, behind);
 

@@ -3,7 +3,7 @@
    Entrypoint and utility functions
    Copyright (C) Matthew Chapman <matthewc.unsw.edu.au> 1999-2008
    Copyright 2002-2011 Peter Astrand <astrand@cendio.se> for Cendio AB
-   Copyright 2010-2011 Henrik Andersson <hean01@cendio.se> for Cendio AB
+   Copyright 2010-2014 Henrik Andersson <hean01@cendio.se> for Cendio AB
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -50,16 +50,19 @@
 
 #include "ssl.h"
 
+/* Reconnect timeout based on approxiamted cookie life-time */
+#define RECONNECT_TIMEOUT (3600+600)
 #define RDESKTOP_LICENSE_STORE "/.local/share/rdesktop/licenses"
 
 uint8 g_static_rdesktop_salt_16[16] = {
-	0xb8, 0x82, 0x29, 0x31, 0xc5, 0x39, 0xd9, 0x44, 
+	0xb8, 0x82, 0x29, 0x31, 0xc5, 0x39, 0xd9, 0x44,
 	0x54, 0x15, 0x5e, 0x14, 0x71, 0x38, 0xd5, 0x4d
 };
 
 char g_title[64] = "";
 char *g_username;
-char g_hostname[16];
+char g_password[64] = "";
+char g_hostname[16] = "";
 char g_keymapname[PATH_MAX] = "";
 unsigned int g_keylayout = 0x409;	/* Defaults to US keyboard layout */
 int g_keyboard_type = 0x4;	/* Defaults to US keyboard layout */
@@ -80,19 +83,22 @@ int g_pos = 0;			/* 0 position unspecified,
 extern int g_tcp_port_rdp;
 int g_server_depth = -1;
 int g_win_button_size = 0;	/* If zero, disable single app mode */
+RD_BOOL g_network_error = False;
 RD_BOOL g_bitmap_compression = True;
 RD_BOOL g_sendmotion = True;
 RD_BOOL g_bitmap_cache = True;
 RD_BOOL g_bitmap_cache_persist_enable = False;
 RD_BOOL g_bitmap_cache_precache = True;
+RD_BOOL g_use_ctrl = True;
 RD_BOOL g_encryption = True;
+RD_BOOL g_encryption_initial = True;
 RD_BOOL g_packet_encryption = True;
 RD_BOOL g_desktop_save = True;	/* desktop save order */
 RD_BOOL g_polygon_ellipse_orders = True;	/* polygon / ellipse orders */
 RD_BOOL g_fullscreen = False;
 RD_BOOL g_grab_keyboard = True;
 RD_BOOL g_hide_decorations = False;
-RD_BOOL g_use_rdp5 = True;
+RDP_VERSION g_rdp_version = RDP_V5;	/* Default to version 5 */
 RD_BOOL g_rdpclip = True;
 RD_BOOL g_console_session = False;
 RD_BOOL g_numlock_sync = False;
@@ -100,22 +106,33 @@ RD_BOOL g_lspci_enabled = False;
 RD_BOOL g_owncolmap = False;
 RD_BOOL g_ownbackstore = True;	/* We can't rely on external BackingStore */
 RD_BOOL g_seamless_rdp = False;
+RD_BOOL g_use_password_as_pin = False;
+char g_seamless_shell[512];
+char g_seamless_spawn_cmd[512];
 RD_BOOL g_user_quit = False;
 uint32 g_embed_wnd;
 uint32 g_rdp5_performanceflags =
-	RDP5_NO_WALLPAPER | RDP5_NO_FULLWINDOWDRAG | RDP5_NO_MENUANIMATIONS;
+	RDP5_NO_WALLPAPER | RDP5_NO_FULLWINDOWDRAG | RDP5_NO_MENUANIMATIONS | RDP5_NO_CURSOR_SHADOW;
 /* Session Directory redirection */
 RD_BOOL g_redirect = False;
-char g_redirect_server[64];
-char g_redirect_domain[16];
-char g_redirect_password[64];
+char *g_redirect_server;
+uint32 g_redirect_server_len;
+char *g_redirect_domain;
+uint32 g_redirect_domain_len;
 char *g_redirect_username;
-char g_redirect_cookie[128];
+uint32 g_redirect_username_len;
+uint8 *g_redirect_lb_info;
+uint32 g_redirect_lb_info_len;
+uint8 *g_redirect_cookie;
+uint32 g_redirect_cookie_len;
 uint32 g_redirect_flags = 0;
+uint32 g_redirect_session_id = 0;
 
 uint32 g_reconnect_logonid = 0;
 char g_reconnect_random[16];
+time_t g_reconnect_random_ts;
 RD_BOOL g_has_reconnect_random = False;
+RD_BOOL g_reconnect_loop = False;
 uint8 g_client_random[SEC_RANDOM_SIZE];
 RD_BOOL g_pending_resize = False;
 
@@ -126,6 +143,11 @@ RD_BOOL g_rdpsnd = False;
 #ifdef HAVE_ICONV
 char g_codepage[16] = "";
 #endif
+
+char *g_sc_csp_name = NULL;	/* Smartcard CSP name  */
+char *g_sc_reader_name = NULL;
+char *g_sc_card_name = NULL;
+char *g_sc_container_name = NULL;
 
 extern RDPDR_DEVICE g_rdpdr_device[];
 extern uint32 g_num_devices;
@@ -154,18 +176,21 @@ usage(char *program)
 #endif
 	fprintf(stderr, "   -u: user name\n");
 	fprintf(stderr, "   -d: domain\n");
-	fprintf(stderr, "   -s: shell\n");
+	fprintf(stderr, "   -s: shell / seamless application to start remotly\n");
 	fprintf(stderr, "   -c: working directory\n");
 	fprintf(stderr, "   -p: password (- to prompt)\n");
 	fprintf(stderr, "   -n: client hostname\n");
 	fprintf(stderr, "   -k: keyboard layout on server (en-us, de, sv, etc.)\n");
 	fprintf(stderr, "   -g: desktop geometry (WxH)\n");
+#ifdef WITH_SCARD
+	fprintf(stderr, "   -i: enables smartcard authentication, password is used as pin\n");
+#endif
 	fprintf(stderr, "   -f: full-screen mode\n");
 	fprintf(stderr, "   -b: force bitmap updates\n");
 #ifdef HAVE_ICONV
 	fprintf(stderr, "   -L: local codepage\n");
 #endif
-	fprintf(stderr, "   -A: enable SeamlessRDP mode\n");
+	fprintf(stderr, "   -A: path to SeamlessRDP shell, this enables SeamlessRDP mode\n");
 	fprintf(stderr, "   -B: use BackingStore of X-server (if available)\n");
 	fprintf(stderr, "   -e: disable encryption (French TS)\n");
 	fprintf(stderr, "   -E: disable encryption from client to server\n");
@@ -175,6 +200,7 @@ usage(char *program)
 	fprintf(stderr, "   -K: keep window manager key bindings\n");
 	fprintf(stderr, "   -S: caption button size (single application mode)\n");
 	fprintf(stderr, "   -T: window title\n");
+	fprintf(stderr, "   -t: disable use of remote ctrl\n");
 	fprintf(stderr, "   -N: enable numlock syncronization\n");
 	fprintf(stderr, "   -X: embed into another window with a given id.\n");
 	fprintf(stderr, "   -a: connection colour depth\n");
@@ -228,6 +254,21 @@ usage(char *program)
 	fprintf(stderr, "   -0: attach to console\n");
 	fprintf(stderr, "   -4: use RDP version 4\n");
 	fprintf(stderr, "   -5: use RDP version 5 (default)\n");
+#ifdef WITH_SCARD
+	fprintf(stderr, "   -o: name=value: Adds an additional option to rdesktop.\n");
+	fprintf(stderr,
+		"           sc-csp-name        Specifies the Crypto Service Provider name which\n");
+	fprintf(stderr,
+		"                              is used to authenticate the user by smartcard\n");
+	fprintf(stderr,
+		"           sc-container-name  Specifies the container name, this is usally the username\n");
+	fprintf(stderr, "           sc-reader-name     Smartcard reader name to use\n");
+	fprintf(stderr,
+		"           sc-card-name       Specifies the card name of the smartcard to use\n");
+#endif
+
+	fprintf(stderr, "\n");
+
 }
 
 static int
@@ -247,7 +288,6 @@ handle_disconnect_reason(RD_BOOL deactivated, uint16 reason)
 			break;
 
 		case exDiscReasonAPIInitiatedDisconnect:
-		case exDiscReasonWindows7Disconnect:
 			text = "Server initiated disconnect";
 			retval = EXRD_API_DISCONNECT;
 			break;
@@ -285,6 +325,26 @@ handle_disconnect_reason(RD_BOOL deactivated, uint16 reason)
 		case exDiscReasonServerDeniedConnectionFips:
 			text = "The server denied the connection for security reason";
 			retval = EXRD_DENIED_FIPS;
+			break;
+
+		case exDiscReasonServerInsufficientPrivileges:
+			text = "The user cannot connect to the server due to insufficient access privileges.";
+			retval = EXRD_INSUFFICIENT_PRIVILEGES;
+			break;
+
+		case exDiscReasonServerFreshCredentialsRequired:
+			text = "The server does not accept saved user credentials and requires that the user enter their credentials for each connection.";
+			retval = EXRD_FRESH_CREDENTIALS_REQUIRED;
+			break;
+
+		case exDiscReasonRPCInitiatedDisconnectByUser:
+			text = "Disconnect initiated by administration tool";
+			retval = EXRD_RPC_DISCONNECT_BY_USER;
+			break;
+
+		case exDiscReasonByUser:
+			text = "Disconnect initiated by user";
+			retval = EXRD_DISCONNECT_BY_USER;
 			break;
 
 		case exDiscReasonLicenseInternal:
@@ -459,10 +519,9 @@ parse_server_and_port(char *server)
 int
 main(int argc, char *argv[])
 {
-	char server[64];
+	char server[256];
 	char fullhostname[64];
 	char domain[256];
-	char password[64];
 	char shell[256];
 	char directory[256];
 	RD_BOOL prompt_password, deactivated;
@@ -497,7 +556,7 @@ main(int argc, char *argv[])
 
 	flags = RDP_LOGON_NORMAL;
 	prompt_password = False;
-	domain[0] = password[0] = shell[0] = directory[0] = 0;
+	g_seamless_spawn_cmd[0] = domain[0] = g_password[0] = shell[0] = directory[0] = 0;
 	g_embed_wnd = 0;
 
 	g_num_devices = 0;
@@ -507,9 +566,8 @@ main(int argc, char *argv[])
 #else
 #define VNCOPT
 #endif
-
 	while ((c = getopt(argc, argv,
-			   VNCOPT "Au:L:d:s:c:p:n:k:g:fbBeEmzCDKS:T:NX:a:x:Pr:045h?")) != -1)
+			   VNCOPT "A:u:L:d:s:c:p:n:k:g:o:fbBeEitmzCDKS:T:NX:a:x:Pr:045h?")) != -1)
 	{
 		switch (c)
 		{
@@ -529,6 +587,7 @@ main(int argc, char *argv[])
 
 			case 'A':
 				g_seamless_rdp = True;
+				STRNCPY(g_seamless_shell, optarg, sizeof(g_seamless_shell));
 				break;
 
 			case 'u':
@@ -564,13 +623,22 @@ main(int argc, char *argv[])
 					break;
 				}
 
-				STRNCPY(password, optarg, sizeof(password));
+				STRNCPY(g_password, optarg, sizeof(g_password));
 				flags |= RDP_LOGON_AUTO;
 
 				/* try to overwrite argument so it won't appear in ps */
 				p = optarg;
 				while (*p)
 					*(p++) = 'X';
+				break;
+#ifdef WITH_SCARD
+			case 'i':
+				flags |= RDP_LOGON_PASSWORD_IS_SC_PIN;
+				g_use_password_as_pin = True;
+				break;
+#endif
+			case 't':
+				g_use_ctrl = False;
 				break;
 
 			case 'n':
@@ -640,7 +708,7 @@ main(int argc, char *argv[])
 				break;
 
 			case 'e':
-				g_encryption = False;
+				g_encryption_initial = g_encryption = False;
 				break;
 			case 'E':
 				g_packet_encryption = False;
@@ -838,13 +906,41 @@ main(int argc, char *argv[])
 				break;
 
 			case '4':
-				g_use_rdp5 = False;
+				g_rdp_version = RDP_V4;
 				break;
 
 			case '5':
-				g_use_rdp5 = True;
+				g_rdp_version = RDP_V5;
 				break;
+#if WITH_SCARD
+			case 'o':
+				{
+					char *p = strchr(optarg, '=');
+					if (p == NULL)
+					{
+						warning("Skipping option '%s' specified, lacks name=value format.\n");
+						continue;
+					}
 
+					if (strncmp(optarg, "sc-csp-name", strlen("sc-scp-name")) ==
+					    0)
+						g_sc_csp_name = strdup(p + 1);
+					else if (strncmp
+						 (optarg, "sc-reader-name",
+						  strlen("sc-reader-name")) == 0)
+						g_sc_reader_name = strdup(p + 1);
+					else if (strncmp
+						 (optarg, "sc-card-name",
+						  strlen("sc-card-name")) == 0)
+						g_sc_card_name = strdup(p + 1);
+					else if (strncmp
+						 (optarg, "sc-container-name",
+						  strlen("sc-container-name")) == 0)
+						g_sc_container_name = strdup(p + 1);
+
+				}
+				break;
+#endif
 			case 'h':
 			case '?':
 			default:
@@ -864,6 +960,11 @@ main(int argc, char *argv[])
 
 	if (g_seamless_rdp)
 	{
+		if (shell[0])
+			STRNCPY(g_seamless_spawn_cmd, shell, sizeof(g_seamless_spawn_cmd));
+
+		STRNCPY(shell, g_seamless_shell, sizeof(shell));
+
 		if (g_win_button_size)
 		{
 			error("You cannot use -S and -A at the same time\n");
@@ -890,7 +991,7 @@ main(int argc, char *argv[])
 			error("You cannot use -X and -A at the same time\n");
 			return EX_USAGE;
 		}
-		if (!g_use_rdp5)
+		if (g_rdp_version < RDP_V5)
 		{
 			error("You cannot use -4 and -A at the same time\n");
 			return EX_USAGE;
@@ -957,7 +1058,7 @@ main(int argc, char *argv[])
 		xfree(locale);
 
 
-	if (prompt_password && read_password(password, sizeof(password)))
+	if (prompt_password && read_password(g_password, sizeof(g_password)))
 		flags |= RDP_LOGON_AUTO;
 
 	if (g_title[0] == 0)
@@ -967,26 +1068,45 @@ main(int argc, char *argv[])
 	}
 
 #ifdef RDP2VNC
-	rdp2vnc_connect(server, flags, domain, password, shell, directory);
+	rdp2vnc_connect(server, flags, domain, g_password, shell, directory);
 	return EX_OK;
 #else
+
+	/* Only startup ctrl functionality is seamless are used for now. */
+	if (g_use_ctrl && g_seamless_rdp)
+	{
+		if (ctrl_init(server, domain, g_username) < 0)
+		{
+			error("Failed to initialize ctrl mode.");
+			exit(1);
+		}
+
+		if (ctrl_is_slave())
+		{
+			fprintf(stdout,
+				"rdesktop in slave mode sending command to master process.\n");
+
+			if (g_seamless_spawn_cmd[0])
+				return ctrl_send_command("seamless.spawn", g_seamless_spawn_cmd);
+
+			fprintf(stdout, "No command specified to be spawn in seamless mode.\n");
+			return EX_USAGE;
+		}
+	}
 
 	if (!ui_init())
 		return EX_OSERR;
 
 #ifdef WITH_RDPSND
-	if (g_rdpsnd)
-	{
-		if (!rdpsnd_init(rdpsnd_optarg))
-			warning("Initializing sound-support failed!\n");
-	}
+	if (!rdpsnd_init(rdpsnd_optarg))
+		warning("Initializing sound-support failed!\n");
 #endif
 
 	if (g_lspci_enabled)
 		lspci_init();
 
 	rdpdr_init();
-
+	g_reconnect_loop = False;
 	while (1)
 	{
 		rdesktop_reset_state();
@@ -997,30 +1117,57 @@ main(int argc, char *argv[])
 			xfree(g_username);
 			g_username = (char *) xmalloc(strlen(g_redirect_username) + 1);
 			STRNCPY(g_username, g_redirect_username, strlen(g_redirect_username) + 1);
-			STRNCPY(password, g_redirect_password, sizeof(password));
 			STRNCPY(server, g_redirect_server, sizeof(server));
 			flags |= RDP_LOGON_AUTO;
+
+			fprintf(stderr, "Redirected to %s@%s session %d.\n",
+				g_redirect_username, g_redirect_server, g_redirect_session_id);
+
+			/* A redirect on SSL from a 2003 WTS will result in a 'connection reset by peer'
+			   and therefor we just clear this error before we connect to redirected server.
+			 */
+			g_network_error = False;
 		}
 
 		ui_init_connection();
-		if (!rdp_connect(server, flags, domain, password, shell, directory, g_redirect))
-			return EX_PROTOCOL;
+		if (!rdp_connect
+		    (server, flags, domain, g_password, shell, directory, g_reconnect_loop))
+		{
+
+			g_network_error = False;
+
+			if (g_reconnect_loop == False)
+				return EX_PROTOCOL;
+
+			/* check if auto reconnect cookie has timed out */
+			if (time(NULL) - g_reconnect_random_ts > RECONNECT_TIMEOUT)
+			{
+				fprintf(stderr, "Tried to reconnect for %d minutes, giving up.\n",
+					RECONNECT_TIMEOUT / 60);
+				return EX_PROTOCOL;
+			}
+
+			sleep(4);
+			continue;
+		}
+
 
 		/* By setting encryption to False here, we have an encrypted login 
 		   packet but unencrypted transfer of other packets */
 		if (!g_packet_encryption)
-			g_encryption = False;
-
+			g_encryption_initial = g_encryption = False;
 
 		DEBUG(("Connection successful.\n"));
-		memset(password, 0, sizeof(password));
 
-		if (!g_redirect)
-			if (!ui_create_window())
-				return EX_OSERR;
+		rd_create_ui();
+		tcp_run_ui(True);
 
+		deactivated = False;
 		g_redirect = False;
+		g_reconnect_loop = False;
 		rdp_main_loop(&deactivated, &ext_disc_reason);
+
+		tcp_run_ui(False);
 
 		DEBUG(("Disconnecting...\n"));
 		rdp_disconnect();
@@ -1028,12 +1175,25 @@ main(int argc, char *argv[])
 		if (g_redirect)
 			continue;
 
+		/* handle network error and start autoreconnect */
+		if (g_network_error && !deactivated)
+		{
+			fprintf(stderr,
+				"Disconnected due to network error, retrying to reconnect for %d minutes.\n",
+				RECONNECT_TIMEOUT / 60);
+			g_network_error = False;
+			g_reconnect_loop = True;
+			continue;
+		}
+
 		ui_seamless_end();
 		ui_destroy_window();
+
+		/* Enter a reconnect loop if we have a pending resize request */
 		if (g_pending_resize)
 		{
-			/* If we have a pending resize, reconnect using the new size, rather than exit */
 			g_pending_resize = False;
+			g_reconnect_loop = True;
 			continue;
 		}
 		break;
@@ -1098,7 +1258,7 @@ generate_random(uint8 * random)
 {
 	struct stat st;
 	struct tms tmsbuf;
-	SSL_MD5 md5;
+	RDSSL_MD5 md5;
 	uint32 *r;
 	int fd, n;
 
@@ -1130,11 +1290,11 @@ generate_random(uint8 * random)
 	r[7] = st.st_ctime;
 
 	/* Hash both halves with MD5 to obscure possible patterns */
-	ssl_md5_init(&md5);
-	ssl_md5_update(&md5, random, 16);
-	ssl_md5_final(&md5, random);
-	ssl_md5_update(&md5, random + 16, 16);
-	ssl_md5_final(&md5, random + 16);
+	rdssl_md5_init(&md5);
+	rdssl_md5_update(&md5, random, 16);
+	rdssl_md5_final(&md5, random);
+	rdssl_md5_update(&md5, random + 16, 16);
+	rdssl_md5_final(&md5, random + 16);
 }
 
 /* malloc; exit if out of memory */
@@ -1501,72 +1661,11 @@ l_to_a(long N, int base)
 	return ret;
 }
 
-static int 
-safe_mkdir(const char *path, int mask)
-{
-	int res = 0;
-	struct stat st;
-
-	res = stat(path, &st);
-	if (res == -1 )
-		return mkdir(path, mask);
-
-	if (!S_ISDIR(st.st_mode))
-	{
-		errno = EEXIST;
-		return -1;
-	}
-
-	return 0;
-}
-
-static int 
-mkdir_p(const char *path, int mask)
-{
-	int res;
-	char *ptok;
-	char pt[PATH_MAX];
-	char bp[PATH_MAX];
-
-	if (!path || strlen(path) == 0)
-	{
-		errno = EINVAL;
-		return -1;
-	}
-	if (strlen(path) > PATH_MAX)
-	{
-		errno = E2BIG;
-		return -1;
-	}
-	
-	res = 0;	
-	pt[0] = bp[0] = '\0';
-	strcpy(bp, path);
-	
-	ptok = strtok(bp, "/");
-	if (ptok == NULL)
-		return safe_mkdir(path,mask);
-
-	do
-	{
-		if (ptok != bp)
-			strcat(pt, "/");
-		
-		strcat(pt, ptok);		
-		res = safe_mkdir(pt, mask);
-		if (res != 0)
-			return res;
-		
-	} while ((ptok = strtok(NULL, "/")) != NULL);
-		
-	return 0;
-}
-
 int
 load_licence(unsigned char **data)
 {
 	uint8 ho[20], hi[16];
-	char *home, path[PATH_MAX], hash[40];
+	char *home, path[PATH_MAX], hash[41];
 	struct stat st;
 	int fd, length;
 
@@ -1574,21 +1673,20 @@ load_licence(unsigned char **data)
 	if (home == NULL)
 		return -1;
 
-	snprintf((char*)hi, 16, g_hostname);
+	memset(hi, 0, sizeof(hi));
+	snprintf((char *) hi, 16, "%s", g_hostname);
 	sec_hash_sha1_16(ho, hi, g_static_rdesktop_salt_16);
-	sec_hash_to_string(hash, 40, ho, 22);
+	sec_hash_to_string(hash, sizeof(hash), ho, sizeof(ho));
 
-	snprintf(path, PATH_MAX, "%s"RDESKTOP_LICENSE_STORE"/%s.cal", 
-		 home, hash);
-	path[sizeof(path)-1] = '\0';
+	snprintf(path, PATH_MAX, "%s" RDESKTOP_LICENSE_STORE "/%s.cal", home, hash);
+	path[sizeof(path) - 1] = '\0';
 
 	fd = open(path, O_RDONLY);
 	if (fd == -1)
 	{
 		/* fallback to try reading old license file */
-		snprintf(path, PATH_MAX, "%s/.rdesktop/license.%s", 
-			 home, g_hostname);
-		path[sizeof(path)-1] = '\0';
+		snprintf(path, PATH_MAX, "%s/.rdesktop/license.%s", home, g_hostname);
+		path[sizeof(path) - 1] = '\0';
 		if ((fd = open(path, O_RDONLY)) == -1)
 			return -1;
 	}
@@ -1609,33 +1707,33 @@ void
 save_licence(unsigned char *data, int length)
 {
 	uint8 ho[20], hi[16];
-	char *home, path[PATH_MAX], tmppath[PATH_MAX], hash[40];
+	char *home, path[PATH_MAX], tmppath[PATH_MAX], hash[41];
 	int fd;
 
 	home = getenv("HOME");
 	if (home == NULL)
 		return;
 
-	snprintf(path, PATH_MAX, "%s"RDESKTOP_LICENSE_STORE, home);
-	path[sizeof(path)-1] = '\0';
-	if ( mkdir_p(path, 0700) == -1)
+	snprintf(path, PATH_MAX, "%s" RDESKTOP_LICENSE_STORE, home);
+	path[sizeof(path) - 1] = '\0';
+	if (utils_mkdir_p(path, 0700) == -1)
 	{
 		perror(path);
 		return;
 	}
 
-	snprintf((char*)hi,16,g_hostname);
+	memset(hi, 0, sizeof(hi));
+	snprintf((char *) hi, 16, "%s", g_hostname);
 	sec_hash_sha1_16(ho, hi, g_static_rdesktop_salt_16);
-	sec_hash_to_string(hash, 40, ho, 20);
+	sec_hash_to_string(hash, sizeof(hash), ho, sizeof(ho));
 
 	/* write licence to {sha1}.cal.new, then atomically 
 	   rename to {sha1}.cal */
-	snprintf(path, PATH_MAX, "%s"RDESKTOP_LICENSE_STORE"/%s.cal", 
-		 home, hash);
-	path[sizeof(path)-1] = '\0';
+	snprintf(path, PATH_MAX, "%s" RDESKTOP_LICENSE_STORE "/%s.cal", home, hash);
+	path[sizeof(path) - 1] = '\0';
 
 	snprintf(tmppath, PATH_MAX, "%s.new", path);
-	path[sizeof(path)-1] = '\0';
+	path[sizeof(path) - 1] = '\0';
 
 	fd = open(tmppath, O_WRONLY | O_CREAT | O_TRUNC, 0600);
 	if (fd == -1)
@@ -1656,6 +1754,18 @@ save_licence(unsigned char *data, int length)
 	}
 
 	close(fd);
+}
+
+/* create rdesktop ui */
+void
+rd_create_ui()
+{
+	/* only create a window if we dont have one intialized */
+	if (!ui_have_window())
+	{
+		if (!ui_create_window())
+			exit(EX_OSERR);
+	}
 }
 
 /* Create the bitmap cache directory */

@@ -3,6 +3,8 @@
    Entrypoint and utility functions
    Copyright (C) Matthew Chapman <matthewc.unsw.edu.au> 1999-2008
    Copyright (C) Jeroen Meijer <jeroen@oldambt7.com> 2003-2008
+   Copyright (C) Henrik Andersson <hean01@cendio.com> 2013
+   
   
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -231,7 +233,9 @@ void
 printercache_process(STREAM s)
 {
 	uint32 type, printer_length, driver_length, printer_unicode_length, blob_length;
-	char device_name[9], printer[256], driver[256];
+	char device_name[9], *printer, *driver;
+
+	printer = driver = NULL;
 
 	in_uint32_le(s, type);
 	switch (type)
@@ -244,17 +248,23 @@ printercache_process(STREAM s)
 
 			/* NOTE - 'driver' doesn't contain driver, it contains the new printer name */
 
-			rdp_in_unistr(s, printer, sizeof(printer), printer_length);
-			rdp_in_unistr(s, driver, sizeof(driver), driver_length);
+			rdp_in_unistr(s, printer_length, &printer, &printer_length);
+			rdp_in_unistr(s, driver_length, &driver, &driver_length);
 
-			printercache_rename_blob(printer, driver);
+			if (printer != NULL && driver != NULL)
+				printercache_rename_blob(printer, driver);
+
+			free(printer);
+			free(driver);
 			break;
 
 		case 3:	/* delete item */
 			in_uint8(s, printer_unicode_length);
 			in_uint8s(s, 0x3);	/* padding */
-			rdp_in_unistr(s, printer, sizeof(printer), printer_unicode_length);
-			printercache_unlink_blob(printer);
+			rdp_in_unistr(s, printer_unicode_length, &printer, &printer_unicode_length);
+			if (printer)
+				printercache_unlink_blob(printer);
+			free(printer);
 			break;
 
 		case 2:	/* save printer data */
@@ -263,8 +273,11 @@ printercache_process(STREAM s)
 
 			if (printer_unicode_length < 2 * 255)
 			{
-				rdp_in_unistr(s, printer, sizeof(printer), printer_unicode_length);
-				printercache_save_blob(printer, s->p, blob_length);
+				rdp_in_unistr(s, printer_unicode_length, &printer,
+					      &printer_unicode_length);
+				if (printer)
+					printercache_save_blob(printer, s->p, blob_length);
+				free(printer);
 			}
 			break;
 

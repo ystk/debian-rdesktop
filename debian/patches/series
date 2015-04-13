@@ -16,8 +16,7 @@
 # 5 -> General code
 # 8 -> Fix for some architectures support
 #
-01_paging.dpatch
+01_paging.patch
 20_update_manpage.dpatch
-32_it_keymap.dpatch
 80_handle_nostrip_option.dpatch
-90-snprintf-format-fix.patch
+Fix_constant_naming_and_enabled_windowskey_by_default.patch

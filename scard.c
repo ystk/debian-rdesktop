@@ -2,8 +2,8 @@
    rdesktop: A Remote Desktop Protocol client.
    Smart Card support
    Copyright (C) Alexi Volkov <alexi@myrealbox.com> 2006
-   Copyright 2010 Pierre Ossman <ossman@cendio.se> for Cendio AB
-   Copyright 2011 Henrik Andersson <hean01@cendio.se> for Cendio AB
+   Copyright 2010-2013 Pierre Ossman <ossman@cendio.se> for Cendio AB
+   Copyright 2011-2013 Henrik Andersson <hean01@cendio.se> for Cendio AB
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -1109,6 +1109,7 @@ TS_SCardGetStatusChange(STREAM in, STREAM out, RD_BOOL wide)
 	MYPCSC_SCARDCONTEXT myHContext;
 	SERVER_DWORD dwTimeout;
 	SERVER_DWORD dwCount;
+	SERVER_DWORD dwPointerId;
 	SERVER_LPSCARD_READERSTATE_A rsArray, cur;
 	MYPCSC_LPSCARD_READERSTATE_A myRsArray;
 	long i;
@@ -1131,31 +1132,31 @@ TS_SCardGetStatusChange(STREAM in, STREAM out, RD_BOOL wide)
 		if (!rsArray)
 			return SC_returnNoMemoryError(&lcHandle, in, out);
 		memset(rsArray, 0, dwCount * sizeof(SERVER_SCARD_READERSTATE_A));
-		/* skip two pointers at beginning of struct */
-		for (i = 0, cur = (SERVER_LPSCARD_READERSTATE_A) ((unsigned char **) rsArray + 2);
-		     i < dwCount; i++, cur++)
+		for (i = 0, cur = rsArray; i < dwCount; i++, cur++)
 		{
-			in->p += 0x04;
-			in_uint8a(in, cur, SERVER_SCARDSTATESIZE);
+			in_uint32_le(in, dwPointerId);
+			cur->szReader = (char *) (intptr_t) dwPointerId;
+			in_uint32_le(in, cur->dwCurrentState);
+			in_uint32_le(in, cur->dwEventState);
+			in_uint32_le(in, cur->cbAtr);
+			in_uint8a(in, cur->rgbAtr, sizeof(cur->rgbAtr));
 		}
 
 		for (i = 0, cur = rsArray; i < dwCount; i++, cur++)
 		{
-			SERVER_DWORD dataLength;
+			if (cur->szReader != NULL)
+			{
+				SERVER_DWORD dataLength;
 
-			/* Do endian swaps... */
-			cur->dwCurrentState = swap32(cur->dwCurrentState);
-			cur->dwEventState = swap32(cur->dwEventState);
-			cur->cbAtr = swap32(cur->cbAtr);
+				in->p += 0x08;
+				in_uint32_le(in, dataLength);
+				inRepos(in,
+					inString(&lcHandle, in, (char **) &(cur->szReader),
+						 dataLength, wide));
 
-			in->p += 0x08;
-			in_uint32_le(in, dataLength);
-			inRepos(in,
-				inString(&lcHandle, in, (char **) &(cur->szReader), dataLength,
-					 wide));
-
-			if (strcmp(cur->szReader, "\\\\?PnP?\\Notification") == 0)
-				cur->dwCurrentState |= SCARD_STATE_IGNORE;
+				if (strcmp(cur->szReader, "\\\\?PnP?\\Notification") == 0)
+					cur->dwCurrentState |= SCARD_STATE_IGNORE;
+			}
 
 			DEBUG_SCARD(("SCARD:    \"%s\"\n", cur->szReader ? cur->szReader : "NULL"));
 			DEBUG_SCARD(("SCARD:        user: %p, state: 0x%08x, event: 0x%08x\n",
@@ -1963,7 +1964,6 @@ TS_SCardGetAttrib(STREAM in, STREAM out)
 	in->p += 0x0C;
 	in_uint32_le(in, hCard);
 	myHCard = _scard_handle_list_get_pcsc_handle(hCard);
-	dwAttrId = dwAttrId & 0x0000FFFF;
 
 	DEBUG_SCARD(("SCARD: SCardGetAttrib(hcard: 0x%08x [0x%08lx], attrib: 0x%08x (%d bytes))\n",
 		     (unsigned) hCard, (unsigned long) myHCard,
@@ -1990,26 +1990,6 @@ TS_SCardGetAttrib(STREAM in, STREAM out)
 	attrLen = dwAttrLen;
 	rv = SCardGetAttrib(myHCard, (MYPCSC_DWORD) dwAttrId, pbAttr, &attrLen);
 	dwAttrLen = attrLen;
-
-	if (dwAttrId == 0x00000100 && rv != SCARD_S_SUCCESS)
-	{
-		DEBUG_SCARD(("SCARD:    Faking attribute ATTR_VENDOR_NAME\n"));
-		pthread_mutex_lock(&hcardAccess);
-		PSCHCardRec hcard = hcardFirst;
-		while (hcard)
-		{
-			if (hcard->hCard == hCard)
-			{
-				dwAttrLen = strlen(hcard->vendor);
-				memcpy(pbAttr, hcard->vendor, dwAttrLen);
-				rv = SCARD_S_SUCCESS;
-				break;
-			}
-			hcard = hcard->next;
-		}
-		pthread_mutex_unlock(&hcardAccess);
-		DEBUG_SCARD(("[0x%.8x]\n", (unsigned int) rv));
-	}
 
 	if (rv != SCARD_S_SUCCESS)
 	{
@@ -2059,8 +2039,6 @@ TS_SCardSetAttrib(STREAM in, STREAM out)
 	in->p += 0x0C;
 	in_uint32_le(in, hCard);
 	myHCard = scHandleToMyPCSC(hCard);
-
-	dwAttrId = dwAttrId & 0x0000FFFF;
 
 	DEBUG_SCARD(("SCARD: SCardSetAttrib(hcard: 0x%08x [0x%08lx], attrib: 0x%08x (%d bytes))\n",
 		     (unsigned) hCard, (unsigned long) myHCard,

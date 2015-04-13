@@ -2,6 +2,7 @@
    rdesktop: A Remote Desktop Protocol client.
    Common data types
    Copyright (C) Matthew Chapman 1999-2008
+   Copyright 2014 Henrik Andersson <hean01@cendio.se> for Cendio AB
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -35,6 +36,15 @@ typedef void *RD_HBITMAP;
 typedef void *RD_HGLYPH;
 typedef void *RD_HCOLOURMAP;
 typedef void *RD_HCURSOR;
+
+
+typedef enum _RDP_VERSION
+{
+	RDP_V4 = 4,
+	RDP_V5 = 5,
+	RDP_V6 = 6
+} RDP_VERSION;
+
 
 typedef struct _RD_POINT
 {
@@ -126,6 +136,16 @@ typedef struct _key_translation
 	struct _key_translation *next;
 }
 key_translation;
+
+typedef struct _key_translation_entry
+{
+	key_translation *tr;
+	/* The full KeySym for this entry, not KEYMAP_MASKed */
+	uint32 keysym;
+	/* This will be non-NULL if there has been a hash collision */
+	struct _key_translation_entry *next;
+}
+key_translation_entry;
 
 typedef struct _VCHANNEL
 {

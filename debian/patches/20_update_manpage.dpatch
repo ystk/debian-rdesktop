@@ -7,7 +7,7 @@
 @DPATCH@
 --- del/rdesktop-1.6.0/doc/rdesktop.1	2007-01-19 14:47:35.000000000 +0100
 +++ rdesktop-1.6.0/doc/rdesktop.1	2011-03-26 13:55:09.806570001 +0100
-@@ -215,6 +215,10 @@
+@@ -231,6 +231,10 @@
  <Vendor Name> - optional device vendor name. For list of examples run
  rdesktop without parameters.
  .TP
