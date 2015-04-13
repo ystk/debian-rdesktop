@@ -1,4 +1,4 @@
-#Czech keymap
+#Slovak keymap
 #2007-05-28 by Jaroslav Jiricka <giahra@atlas.cz>
 include common
 
@@ -67,7 +67,7 @@ sequence nacute dead_acute n
 sequence Nacute dead_acute N
 #Additional sequences end
 
-map 0x405
+map 0x41B
 
 semicolon 0x29
 dead_abovering 0x29 shift
@@ -77,7 +77,7 @@ plus 0x02
 dead_tilde 0x02 altgr
 asciitilde 0x02 altgr
 
-ecaron 0x03
+lcaron 0x03
 2 0x03 shift
 dead_caron 0x03 altgr
 
@@ -89,7 +89,7 @@ ccaron 0x05
 4 0x05 shift
 dead_breve 0x05 altgr
 
-rcaron 0x06
+tcaron 0x06
 5 0x06 shift
 dead_abovering 0x06 altgr
 
@@ -115,7 +115,7 @@ dead_doubleacute 0x0b altgr
 
 equal 0x0c
 percent 0x0c shift
-dead_macron 0x0c altgr
+dead_diaeresis 0x0c altgr
 
 dead_acute 0x0d
 dead_caron 0x0d shift
@@ -129,16 +129,18 @@ EuroSign 0x12 altgr
 
 z 0x15 addupper
 
+apostrophe 0x19 altgr
+
 uacute 0x1a
 slash 0x1a shift
 division 0x1a altgr
 
-parenright 0x1b
+adiaeresis 0x1b
 parenleft 0x1b shift
 multiply 0x1b altgr
 
-dead_diaeresis 0x2b
-apostrophe 0x2b shift
+ncaron 0x2b
+parenright 0x2b shift
 currency 0x2b altgr
 
 dstroke 0x1f altgr
@@ -153,7 +155,7 @@ lstroke 0x25 altgr
 
 Lstroke 0x26 altgr
 
-uring 0x27
+ocircumflex 0x27
 quotedbl 0x27 shift
 dollar 0x27 altgr
 

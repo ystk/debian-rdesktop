@@ -3,6 +3,7 @@
    Protocol services - TCP layer
    Copyright (C) Matthew Chapman <matthewc.unsw.edu.au> 1999-2008
    Copyright 2005-2011 Peter Astrand <astrand@cendio.se> for Cendio AB
+   Copyright 2012-2013 Henrik Andersson <hean01@cendio.se> for Cendio AB
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -29,6 +30,10 @@
 #include <errno.h>		/* errno */
 #endif
 
+#include <openssl/ssl.h>
+#include <openssl/x509.h>
+#include <openssl/err.h>
+
 #include "rdesktop.h"
 
 #ifdef _WIN32
@@ -52,11 +57,17 @@
 #define STREAM_COUNT 1
 #endif
 
+static RD_BOOL g_ssl_initialized = False;
+static SSL *g_ssl = NULL;
+static SSL_CTX *g_ssl_ctx = NULL;
 static int g_sock;
+static RD_BOOL g_run_ui = False;
 static struct stream g_in;
 static struct stream g_out[STREAM_COUNT];
 int g_tcp_port_rdp = TCP_PORT_RDP;
 extern RD_BOOL g_user_quit;
+extern RD_BOOL g_network_error;
+extern RD_BOOL g_reconnect_loop;
 
 /* wait till socket is ready to write or timeout */
 static RD_BOOL
@@ -109,26 +120,62 @@ tcp_init(uint32 maxlen)
 void
 tcp_send(STREAM s)
 {
+	int ssl_err;
 	int length = s->end - s->data;
 	int sent, total = 0;
+
+	if (g_network_error == True)
+		return;
 
 #ifdef WITH_SCARD
 	scard_lock(SCARD_LOCK_TCP);
 #endif
 	while (total < length)
 	{
-		sent = send(g_sock, s->data + total, length - total, 0);
-		if (sent <= 0)
+		if (g_ssl)
 		{
-			if (sent == -1 && TCP_BLOCKS)
+			sent = SSL_write(g_ssl, s->data + total, length - total);
+			if (sent <= 0)
 			{
-				tcp_can_send(g_sock, 100);
-				sent = 0;
+				ssl_err = SSL_get_error(g_ssl, sent);
+				if (sent < 0 && (ssl_err == SSL_ERROR_WANT_READ ||
+						 ssl_err == SSL_ERROR_WANT_WRITE))
+				{
+					tcp_can_send(g_sock, 100);
+					sent = 0;
+				}
+				else
+				{
+#ifdef WITH_SCARD
+					scard_unlock(SCARD_LOCK_TCP);
+#endif
+
+					error("SSL_write: %d (%s)\n", ssl_err, TCP_STRERROR);
+					g_network_error = True;
+					return;
+				}
 			}
-			else
+		}
+		else
+		{
+			sent = send(g_sock, s->data + total, length - total, 0);
+			if (sent <= 0)
 			{
-				error("send: %s\n", TCP_STRERROR);
-				return;
+				if (sent == -1 && TCP_BLOCKS)
+				{
+					tcp_can_send(g_sock, 100);
+					sent = 0;
+				}
+				else
+				{
+#ifdef WITH_SCARD
+					scard_unlock(SCARD_LOCK_TCP);
+#endif
+
+					error("send: %s\n", TCP_STRERROR);
+					g_network_error = True;
+					return;
+				}
 			}
 		}
 		total += sent;
@@ -143,7 +190,10 @@ STREAM
 tcp_recv(STREAM s, uint32 length)
 {
 	uint32 new_length, end_offset, p_offset;
-	int rcvd = 0;
+	int rcvd = 0, ssl_err;
+
+	if (g_network_error == True)
+		return NULL;
 
 	if (s == NULL)
 	{
@@ -173,30 +223,67 @@ tcp_recv(STREAM s, uint32 length)
 
 	while (length > 0)
 	{
-		if (!ui_select(g_sock))
+		if ((!g_ssl || SSL_pending(g_ssl) <= 0) && g_run_ui)
 		{
-			/* User quit */
-			g_user_quit = True;
-			return NULL;
-		}
-
-		rcvd = recv(g_sock, s->end, length, 0);
-		if (rcvd < 0)
-		{
-			if (rcvd == -1 && TCP_BLOCKS)
+			if (!ui_select(g_sock))
 			{
-				rcvd = 0;
-			}
-			else
-			{
-				error("recv: %s\n", TCP_STRERROR);
+				/* User quit */
+				g_user_quit = True;
 				return NULL;
 			}
 		}
-		else if (rcvd == 0)
+
+		if (g_ssl)
 		{
-			error("Connection closed\n");
-			return NULL;
+			rcvd = SSL_read(g_ssl, s->end, length);
+			ssl_err = SSL_get_error(g_ssl, rcvd);
+
+			if (ssl_err == SSL_ERROR_SSL)
+			{
+				if (SSL_get_shutdown(g_ssl) & SSL_RECEIVED_SHUTDOWN)
+				{
+					error("Remote peer initiated ssl shutdown.\n");
+					return NULL;
+				}
+
+				ERR_print_errors_fp(stdout);
+				g_network_error = True;
+				return NULL;
+			}
+
+			if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE)
+			{
+				rcvd = 0;
+			}
+			else if (ssl_err != SSL_ERROR_NONE)
+			{
+				error("SSL_read: %d (%s)\n", ssl_err, TCP_STRERROR);
+				g_network_error = True;
+				return NULL;
+			}
+
+		}
+		else
+		{
+			rcvd = recv(g_sock, s->end, length, 0);
+			if (rcvd < 0)
+			{
+				if (rcvd == -1 && TCP_BLOCKS)
+				{
+					rcvd = 0;
+				}
+				else
+				{
+					error("recv: %s\n", TCP_STRERROR);
+					g_network_error = True;
+					return NULL;
+				}
+			}
+			else if (rcvd == 0)
+			{
+				error("Connection closed\n");
+				return NULL;
+			}
 		}
 
 		s->end += rcvd;
@@ -204,6 +291,128 @@ tcp_recv(STREAM s, uint32 length)
 	}
 
 	return s;
+}
+
+/* Establish a SSL/TLS 1.0 connection */
+RD_BOOL
+tcp_tls_connect(void)
+{
+	int err;
+	long options;
+
+	if (!g_ssl_initialized)
+	{
+		SSL_load_error_strings();
+		SSL_library_init();
+		g_ssl_initialized = True;
+	}
+
+	/* create process context */
+	if (g_ssl_ctx == NULL)
+	{
+		g_ssl_ctx = SSL_CTX_new(TLSv1_client_method());
+		if (g_ssl_ctx == NULL)
+		{
+			error("tcp_tls_connect: SSL_CTX_new() failed to create TLS v1.0 context\n");
+			goto fail;
+		}
+
+		options = 0;
+#ifdef SSL_OP_NO_COMPRESSION
+		options |= SSL_OP_NO_COMPRESSION;
+#endif // __SSL_OP_NO_COMPRESSION
+		options |= SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS;
+		SSL_CTX_set_options(g_ssl_ctx, options);
+	}
+
+	/* free old connection */
+	if (g_ssl)
+		SSL_free(g_ssl);
+
+	/* create new ssl connection */
+	g_ssl = SSL_new(g_ssl_ctx);
+	if (g_ssl == NULL)
+	{
+		error("tcp_tls_connect: SSL_new() failed\n");
+		goto fail;
+	}
+
+	if (SSL_set_fd(g_ssl, g_sock) < 1)
+	{
+		error("tcp_tls_connect: SSL_set_fd() failed\n");
+		goto fail;
+	}
+
+	do
+	{
+		err = SSL_connect(g_ssl);
+	}
+	while (SSL_get_error(g_ssl, err) == SSL_ERROR_WANT_READ);
+
+	if (err < 0)
+	{
+		ERR_print_errors_fp(stdout);
+		goto fail;
+	}
+
+	return True;
+
+      fail:
+	if (g_ssl)
+		SSL_free(g_ssl);
+	if (g_ssl_ctx)
+		SSL_CTX_free(g_ssl_ctx);
+
+	g_ssl = NULL;
+	g_ssl_ctx = NULL;
+	return False;
+}
+
+/* Get public key from server of TLS 1.0 connection */
+RD_BOOL
+tcp_tls_get_server_pubkey(STREAM s)
+{
+	X509 *cert = NULL;
+	EVP_PKEY *pkey = NULL;
+
+	s->data = s->p = NULL;
+	s->size = 0;
+
+	if (g_ssl == NULL)
+		goto out;
+
+	cert = SSL_get_peer_certificate(g_ssl);
+	if (cert == NULL)
+	{
+		error("tcp_tls_get_server_pubkey: SSL_get_peer_certificate() failed\n");
+		goto out;
+	}
+
+	pkey = X509_get_pubkey(cert);
+	if (pkey == NULL)
+	{
+		error("tcp_tls_get_server_pubkey: X509_get_pubkey() failed\n");
+		goto out;
+	}
+
+	s->size = i2d_PublicKey(pkey, NULL);
+	if (s->size < 1)
+	{
+		error("tcp_tls_get_server_pubkey: i2d_PublicKey() failed\n");
+		goto out;
+	}
+
+	s->data = s->p = xmalloc(s->size);
+	i2d_PublicKey(pkey, &s->p);
+	s->p = s->data;
+	s->end = s->p + s->size;
+
+      out:
+	if (cert)
+		X509_free(cert);
+	if (pkey)
+		EVP_PKEY_free(pkey);
+	return (s->size != 0);
 }
 
 /* Establish a connection on the TCP layer */
@@ -280,8 +489,11 @@ tcp_connect(char *server)
 
 	if (connect(g_sock, (struct sockaddr *) &servaddr, sizeof(struct sockaddr)) < 0)
 	{
-		error("connect: %s\n", TCP_STRERROR);
+		if (!g_reconnect_loop)
+			error("connect: %s\n", TCP_STRERROR);
+
 		TCP_CLOSE(g_sock);
+		g_sock = -1;
 		return False;
 	}
 
@@ -318,7 +530,18 @@ tcp_connect(char *server)
 void
 tcp_disconnect(void)
 {
+	if (g_ssl)
+	{
+		if (!g_network_error)
+			(void) SSL_shutdown(g_ssl);
+		SSL_free(g_ssl);
+		g_ssl = NULL;
+		SSL_CTX_free(g_ssl_ctx);
+		g_ssl_ctx = NULL;
+	}
+
 	TCP_CLOSE(g_sock);
+	g_sock = -1;
 }
 
 char *
@@ -337,14 +560,22 @@ tcp_get_address()
 	return ipaddr;
 }
 
+RD_BOOL
+tcp_is_connected()
+{
+	struct sockaddr_in sockaddr;
+	socklen_t len = sizeof(sockaddr);
+	if (getpeername(g_sock, (struct sockaddr *) &sockaddr, &len))
+		return True;
+	return False;
+}
+
 /* reset the state of the tcp layer */
 /* Support for Session Directory */
 void
 tcp_reset_state(void)
 {
 	int i;
-
-	g_sock = -1;		/* reset socket */
 
 	/* Clear the incoming stream */
 	if (g_in.data != NULL)
@@ -374,4 +605,10 @@ tcp_reset_state(void)
 		g_out[i].rdp_hdr = NULL;
 		g_out[i].channel_hdr = NULL;
 	}
+}
+
+void
+tcp_run_ui(RD_BOOL run)
+{
+	g_run_ui = run;
 }

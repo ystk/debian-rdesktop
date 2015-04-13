@@ -2,7 +2,7 @@
    rdesktop: A Remote Desktop Protocol client.
    Copyright (C) Matthew Chapman <matthewc.unsw.edu.au> 1999-2008
    Copyright 2004-2011 Peter Astrand <astrand@cendio.se> for Cendio AB
-   Copyright 2010-2011 Henrik Andersson <hean01@cendio.se> for Cendio AB
+   Copyright 2010-2013 Henrik Andersson <hean01@cendio.se> for Cendio AB
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -362,7 +362,9 @@ rdpdr_process_irp(STREAM s)
 		error_mode,
 		share_mode, disposition, total_timeout, interval_timeout, flags_and_attributes = 0;
 
-	char filename[PATH_MAX];
+	char *filename;
+	uint32 filename_len;
+
 	uint8 *buffer, *pst_buf;
 	struct stream out;
 	DEVICE_FNS *fns;
@@ -375,9 +377,19 @@ rdpdr_process_irp(STREAM s)
 	in_uint32_le(s, major);
 	in_uint32_le(s, minor);
 
+	filename = NULL;
+
 	buffer_len = 0;
 	buffer = (uint8 *) xmalloc(1024);
 	buffer[0] = 0;
+
+	if (device >= RDPDR_MAX_DEVICES)
+	{
+		error("invalid irp device 0x%lx file 0x%lx id 0x%lx major 0x%lx minor 0x%lx\n",
+		      device, file, id, major, minor);
+		xfree(buffer);
+		return;
+	}
 
 	switch (g_rdpdr_device[device].device_type)
 	{
@@ -413,6 +425,7 @@ rdpdr_process_irp(STREAM s)
 		default:
 
 			error("IRP for bad device %ld\n", device);
+			xfree(buffer);
 			return;
 	}
 
@@ -430,22 +443,22 @@ rdpdr_process_irp(STREAM s)
 
 			if (length && (length / 2) < 256)
 			{
-				rdp_in_unistr(s, filename, sizeof(filename), length);
-				convert_to_unix_filename(filename);
-			}
-			else
-			{
-				filename[0] = 0;
+				rdp_in_unistr(s, length, &filename, &filename_len);
+				if (filename)
+					convert_to_unix_filename(filename);
 			}
 
 			if (!fns->create)
 			{
 				status = RD_STATUS_NOT_SUPPORTED;
+				free(filename);
 				break;
 			}
 
 			status = fns->create(device, desired_access, share_mode, disposition,
 					     flags_and_attributes, filename, &result);
+
+			free(filename);
 			buffer_len = 1;
 			break;
 
@@ -623,14 +636,11 @@ rdpdr_process_irp(STREAM s)
 					in_uint8s(s, 0x17);
 					if (length && length < 2 * 255)
 					{
-						rdp_in_unistr(s, filename, sizeof(filename),
-							      length);
-						convert_to_unix_filename(filename);
+						rdp_in_unistr(s, length, &filename, &filename_len);
+						if (filename)
+							convert_to_unix_filename(filename);
 					}
-					else
-					{
-						filename[0] = 0;
-					}
+
 					out.data = out.p = buffer;
 					out.size = sizeof(buffer);
 					status = disk_query_directory(file, info_level, filename,
@@ -638,6 +648,8 @@ rdpdr_process_irp(STREAM s)
 					result = buffer_len = out.p - out.data;
 					if (!buffer_len)
 						buffer_len++;
+
+					free(filename);
 					break;
 
 				case IRP_MN_NOTIFY_CHANGE_DIRECTORY:

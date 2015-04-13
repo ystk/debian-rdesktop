@@ -1,4 +1,4 @@
-AC_INIT(rdesktop, 1.7.1)
+AC_INIT(rdesktop, 1.8.2)
 
 AC_CONFIG_SRCDIR([rdesktop.c])
 
@@ -103,9 +103,9 @@ AC_ARG_ENABLE(static-openssl,
 if test x"$static_openssl" = "xyes"; then
     # OpenSSL generally relies on libz
     AC_SEARCH_LIBS(deflate, z)
-    LIBS="-L$ssldir/lib -L$ssldir/lib64 -Wl,-Bstatic -lcrypto -Wl,-Bdynamic $LIBS"
+    LIBS="-L$ssldir/lib -L$ssldir/lib64 -Wl,-Bstatic -lssl -lcrypto -Wl,-Bdynamic $LIBS"
 else
-    LIBS="-L$ssldir/lib -L$ssldir/lib64 -lcrypto $LIBS"
+    LIBS="-L$ssldir/lib -L$ssldir/lib64 -lssl -lcrypto $LIBS"
 
     #
     # target-specific stuff
@@ -120,6 +120,36 @@ else
     esac
 fi
 
+dnl CredSSP feature
+AC_ARG_ENABLE([credssp], AS_HELP_STRING([--disable-credssp], [disable support for CredSSP]))
+AC_ARG_ENABLE([static-gssglue], AS_HELP_STRING([--enable-static-gssglue]), 
+	      [static_gssglue=yes], [static_gssglue=no])
+AS_IF([test "x$enable_credssp" != "xno"], [
+	  if test -n "$PKG_CONFIG"; then
+	    PKG_CHECK_MODULES(GSSGLUE, libgssglue, [WITH_CREDSSP=1], [WITH_CREDSSP=0])
+	  fi
+
+	  if test x"$WITH_CREDSSP" = "x1"; then
+	      CREDSSPOBJ="cssp.o"
+	      CFLAGS="$CFLAGS $GSSGLUE_CFLAGS"
+
+	      AS_IF([test "x$static_gssglue" != "xno"], [
+	          LIBS="$LIBS -Wl,-Bstatic -lgssglue -Wl,-Bdynamic"
+	      ], [
+	          LIBS="$LIBS -lgssglue"
+	      ])
+
+	      AC_DEFINE(WITH_CREDSSP)
+	  else
+		echo
+		echo "CredSSP support requires libgssglue, install the dependency"
+		echo "or disable the feature using --disable-credssp."
+		echo
+		exit 1
+	  fi
+])
+AC_SUBST(CREDSSPOBJ)
+
 # xrandr
 if test -n "$PKG_CONFIG"; then
     PKG_CHECK_MODULES(XRANDR, xrandr, [HAVE_XRANDR=1], [HAVE_XRANDR=0])
@@ -130,46 +160,49 @@ if test x"$HAVE_XRANDR" = "x1"; then
     AC_DEFINE(HAVE_XRANDR)
 fi
 
-AC_ARG_ENABLE(smartcard, 
-             [  --enable-smartcard	  Enables smart-card support.
-	     ],
-             [ 
-	     	case "$OSTYPE" in
-			darwin*)
-				AC_CHECK_HEADER(PCSC/pcsclite.h, [WITH_SCARD=1], [WITH_SCARD=0])
-				PCSCLITE_CFLAGS=""
-				PCSCLITE_LIBS="-framework PCSC"
-				;;
-			*)
-				if test -n "$PKG_CONFIG"; then
-					PKG_CHECK_MODULES(PCSCLITE, libpcsclite, [WITH_SCARD=1], [WITH_SCARD=0])
-				fi
-				;;
-		esac
-
-		if test x"$WITH_SCARD" = "x1"; then
-			SCARDOBJ="scard.o"
-			CFLAGS="$CFLAGS $PCSCLITE_CFLAGS"
-			LIBS="$LIBS $PCSCLITE_LIBS"
-			AC_DEFINE(WITH_SCARD)
+dnl Smartcard support
+AC_ARG_ENABLE(smartcard, AS_HELP_STRING([--disable-smartcard], [disable support for smartcard]))
+AS_IF([test "x$enable_smartcard" != "xno"], [
+	case "$OSTYPE" in
+	     darwin*)
+		AC_CHECK_HEADER(PCSC/pcsclite.h, [WITH_SCARD=1], [WITH_SCARD=0])
+		PCSCLITE_CFLAGS=""
+		PCSCLITE_LIBS="-framework PCSC"
+		;;
+	     *)
+		if test -n "$PKG_CONFIG"; then
+		   PKG_CHECK_MODULES(PCSCLITE, libpcsclite, [WITH_SCARD=1], [WITH_SCARD=0])
 		fi
+		;;
+	esac
 
-		AC_MSG_CHECKING([for old version of PCSC])
-		AC_TRY_LINK([
-			#include <stdlib.h>
-			#ifdef __APPLE__
-			#include <PCSC/wintypes.h>
-			#include <PCSC/winscard.h>
-			#else
-			#include <winscard.h>
-			#endif
-			],
-			[SCardControl(NULL, NULL, 0, NULL, NULL);],
-			[AC_MSG_RESULT(yes) AC_DEFINE(WITH_PCSC120, 1, [old version of PCSC])],
-			[AC_MSG_RESULT(no)]
-		)
-             ])
+	if test x"$WITH_SCARD" = "x1"; then
+	   SCARDOBJ="scard.o"
+	   CFLAGS="$CFLAGS $PCSCLITE_CFLAGS"
+	   LIBS="$LIBS $PCSCLITE_LIBS"
+	   AC_DEFINE(WITH_SCARD)
+	else
+	   echo
+	   echo "SmartCard support requires PCSC, install the dependency"
+	   echo "or disable the feature using --disable-smartcard."
+	   echo
+	   exit 1
+	fi
 
+	AC_MSG_CHECKING([for old version of PCSC])
+	AC_TRY_LINK([
+		#include <stdlib.h>
+		#ifdef __APPLE__
+		#include <PCSC/wintypes.h>
+		#include <PCSC/winscard.h>
+		#else
+		#include <winscard.h>
+		#endif
+		],
+		[SCardControl(NULL, NULL, 0, NULL, NULL);],
+		[AC_MSG_RESULT(yes) AC_DEFINE(WITH_PCSC120, 1, [old version of PCSC])],
+		[AC_MSG_RESULT(no)])
+])
 AC_SUBST(SCARDOBJ)
 
 #
@@ -901,6 +934,17 @@ AC_ARG_WITH(debug-smartcard,
         then
 		if test x"$WITH_SCARD" = "x1"; then
 			AC_DEFINE(WITH_DEBUG_SCARD,1)
+		fi
+	fi
+    ])
+
+AC_ARG_WITH(debug-credssp,
+    [  --with-debug-credssp	enable debugging of CredSSP code],
+    [
+	if test $withval != "no";
+	then
+		if test x"$WITH_CREDSSP" = "x1"; then
+		   AC_DEFINE(WITH_DEBUG_CREDSSP,1)
 		fi
 	fi
     ])

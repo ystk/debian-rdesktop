@@ -33,6 +33,31 @@ enum ISO_PDU_CODE
 	ISO_PDU_ER = 0x70	/* Error */
 };
 
+/* RDP protocol negotiating constants */
+enum RDP_NEG_TYPE_CODE
+{
+	RDP_NEG_REQ = 1,
+	RDP_NEG_RSP = 2,
+	RDP_NEG_FAILURE = 3
+};
+
+enum RDP_NEG_REQ_CODE
+{
+	PROTOCOL_RDP = 0,
+	PROTOCOL_SSL = 1,
+	PROTOCOL_HYBRID = 2
+};
+
+enum RDP_NEG_FAILURE_CODE
+{
+	SSL_REQUIRED_BY_SERVER = 1,
+	SSL_NOT_ALLOWED_BY_SERVER = 2,
+	SSL_CERT_NOT_ON_SERVER = 3,
+	INCONSISTENT_FLAGS = 4,
+	HYBRID_REQUIRED_BY_SERVER = 5,
+	SSL_WITH_USER_AUTH_REQUIRED_BY_SERVER = 6
+};
+
 /* MCS PDU codes */
 enum MCS_PDU_TYPE
 {
@@ -53,6 +78,10 @@ enum MCS_PDU_TYPE
 #define BER_TAG_INTEGER		2
 #define BER_TAG_OCTET_STRING	4
 #define BER_TAG_RESULT		10
+#define BER_TAG_SEQUENCE	16
+#define BER_TAG_CONSTRUCTED	0x20
+#define BER_TAG_CTXT_SPECIFIC	0x80
+
 #define MCS_TAG_DOMAIN_PARAMS	0x30
 
 #define MCS_GLOBAL_CHANNEL	1003
@@ -78,38 +107,50 @@ enum MCS_PDU_TYPE
 #define SEC_TAG_CLI_INFO	0xc001
 #define SEC_TAG_CLI_CRYPT	0xc002
 #define SEC_TAG_CLI_CHANNELS    0xc003
-#define SEC_TAG_CLI_4           0xc004
+#define SEC_TAG_CLI_CLUSTER     0xc004
 
 #define SEC_TAG_PUBKEY		0x0006
 #define SEC_TAG_KEYSIG		0x0008
 
 #define SEC_RSA_MAGIC		0x31415352	/* RSA1 */
 
+/* Client cluster constants */
+#define SEC_CC_REDIRECTION_SUPPORTED          0x00000001
+#define SEC_CC_REDIRECT_SESSIONID_FIELD_VALID 0x00000002
+#define SEC_CC_REDIRECTED_SMARTCARD           0x00000040
+#define SEC_CC_REDIRECT_VERSION_MASK          0x0000003c
+
+#define SEC_CC_REDIRECT_VERSION_3             0x02
+#define SEC_CC_REDIRECT_VERSION_4             0x03
+#define SEC_CC_REDIRECT_VERSION_5             0x04
+#define SEC_CC_REDIRECT_VERSION_6             0x05
+
 /* RDP licensing constants */
 #define LICENCE_TOKEN_SIZE	10
 #define LICENCE_HWID_SIZE	20
 #define LICENCE_SIGNATURE_SIZE	16
 
-#define LICENCE_TAG_DEMAND	0x01
-#define LICENCE_TAG_AUTHREQ	0x02
-#define LICENCE_TAG_ISSUE	0x03
-#define LICENCE_TAG_REISSUE	0x04
-#define LICENCE_TAG_PRESENT	0x12
-#define LICENCE_TAG_REQUEST	0x13
-#define LICENCE_TAG_AUTHRESP	0x15
-#define LICENCE_TAG_RESULT	0xff
+#define LICENCE_TAG_REQUEST                     0x01
+#define LICENCE_TAG_PLATFORM_CHALLANGE          0x02
+#define LICENCE_TAG_NEW_LICENCE                 0x03
+#define LICENCE_TAG_UPGRADE_LICENCE             0x04
+#define LICENCE_TAG_LICENCE_INFO                0x12
+#define LICENCE_TAG_NEW_LICENCE_REQUEST         0x13
+#define LICENCE_TAG_PLATFORM_CHALLANGE_RESPONSE 0x15
+#define LICENCE_TAG_ERROR_ALERT                 0xff
 
-#define LICENCE_TAG_USER	0x000f
-#define LICENCE_TAG_HOST	0x0010
+#define BB_CLIENT_USER_NAME_BLOB	0x000f
+#define BB_CLIENT_MACHINE_NAME_BLOB	0x0010
 
 /* RDP PDU codes */
 enum RDP_PDU_TYPE
 {
 	RDP_PDU_DEMAND_ACTIVE = 1,
 	RDP_PDU_CONFIRM_ACTIVE = 3,
-	RDP_PDU_REDIRECT = 4,	/* MS Server 2003 Session Redirect */
+	RDP_PDU_REDIRECT = 4,	/* Standard Server Redirect */
 	RDP_PDU_DEACTIVATE = 6,
-	RDP_PDU_DATA = 7
+	RDP_PDU_DATA = 7,
+	RDP_PDU_ENHANCED_REDIRECT = 10	/* Enhanced Server Redirect */
 };
 
 enum RDP_DATA_PDU_TYPE
@@ -124,7 +165,8 @@ enum RDP_DATA_PDU_TYPE
 	RDP_DATA_PDU_LOGON = 38,	/* PDUTYPE2_SAVE_SESSION_INFO */
 	RDP_DATA_PDU_FONT2 = 39,
 	RDP_DATA_PDU_KEYBOARD_INDICATORS = 41,
-	RDP_DATA_PDU_DISCONNECT = 47
+	RDP_DATA_PDU_DISCONNECT = 47,
+	RDP_DATA_PDU_AUTORECONNECT_STATUS = 50
 };
 
 enum RDP_SAVE_SESSION_PDU_TYPE
@@ -282,6 +324,7 @@ enum RDP_INPUT_DEVICE
 #define RDP_LOGON_BLOB		0x0100
 #define RDP_LOGON_COMPRESSION2	0x0200	/* rdp5 mppc compression with 64kB history buffer */
 #define RDP_LOGON_LEAVE_AUDIO	0x2000
+#define RDP_LOGON_PASSWORD_IS_SC_PIN 0x40000
 
 #define RDP5_DISABLE_NOTHING	0x00
 #define RDP5_NO_WALLPAPER	0x01
@@ -399,6 +442,9 @@ enum RDP_INPUT_DEVICE
 #define RD_STATUS_CANCELLED                0xc0000120
 #define RD_STATUS_DIRECTORY_NOT_EMPTY      0xc0000101
 
+/* RDPSND constants */
+#define TSSNDCAPS_ALIVE                    0x00000001
+#define TSSNDCAPS_VOLUME                   0x00000002
 
 /* RDPDR constants */
 #define RDPDR_MAX_DEVICES               0x10
@@ -424,7 +470,10 @@ enum RDP_INPUT_DEVICE
 #define exDiscReasonOutOfMemory				0x0006
 #define exDiscReasonServerDeniedConnection		0x0007
 #define exDiscReasonServerDeniedConnectionFips		0x0008
-#define exDiscReasonWindows7Disconnect                  0x000b	/* unofficial */
+#define exDiscReasonServerInsufficientPrivileges        0x0009
+#define exDiscReasonServerFreshCredentialsRequired      0x000a
+#define exDiscReasonRPCInitiatedDisconnectByUser        0x000b
+#define exDiscReasonByUser                              0x000c
 #define exDiscReasonLicenseInternal			0x0100
 #define exDiscReasonLicenseNoLicenseServer		0x0101
 #define exDiscReasonLicenseNoLicense			0x0102
@@ -462,7 +511,7 @@ enum RDP_INPUT_DEVICE
 enum RDP_PDU_REDIRECT_FLAGS
 {
 	PDU_REDIRECT_HAS_IP = 0x1,
-	PDU_REDIRECT_HAS_COOKIE = 0x2,
+	PDU_REDIRECT_HAS_LOAD_BALANCE_INFO = 0x2,
 	PDU_REDIRECT_HAS_USERNAME = 0x4,
 	PDU_REDIRECT_HAS_DOMAIN = 0x8,
 	PDU_REDIRECT_HAS_PASSWORD = 0x10,
