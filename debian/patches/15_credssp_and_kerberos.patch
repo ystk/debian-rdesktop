@@ -1,0 +1,23 @@
+Description: credssp and kerberos fix
+ Fix sigsegv while using credssp and kerberos without specifying domainname
+ as argument.
+Origin: upstream, http://sourceforge.net/p/rdesktop/code/1824/
+Forwarded: not-needed
+Author: Henrik Andersson <hean01@users.sourceforge.net>
+Bug-Debian: https://bugs.debian.org/784634
+Last-Update: 2014-08-27
+
+---
+
+--- rdesktop-1.8.2.orig/rdp.c
++++ rdesktop-1.8.2/rdp.c
+@@ -189,6 +189,9 @@ rdp_send_data(STREAM s, uint8 data_pdu_t
+ void
+ rdp_out_unistr(STREAM s, char *string, int len)
+ {
++	if (string == NULL || len == 0)
++		return;
++
+ #ifdef HAVE_ICONV
+ 	size_t ibl = strlen(string), obl = len + 2;
+ 	static iconv_t iconv_h = (iconv_t) - 1;

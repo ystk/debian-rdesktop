@@ -20,3 +20,4 @@
 20_update_manpage.dpatch
 80_handle_nostrip_option.dpatch
 Fix_constant_naming_and_enabled_windowskey_by_default.patch
+15_credssp_and_kerberos.patch
