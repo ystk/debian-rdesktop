@@ -3,7 +3,7 @@
    Smart Card support
    Copyright (C) Alexi Volkov <alexi@myrealbox.com> 2006
    Copyright 2010-2013 Pierre Ossman <ossman@cendio.se> for Cendio AB
-   Copyright 2011-2013 Henrik Andersson <hean01@cendio.se> for Cendio AB
+   Copyright 2011-2014 Henrik Andersson <hean01@cendio.se> for Cendio AB
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -63,7 +63,7 @@
 
 static pthread_mutex_t **scard_mutex = NULL;
 
-static uint32 curDevice = 0, curId = 0, curBytesOut = 0;
+static uint32 curEpoch = 0, curDevice = 0, curId = 0, curBytesOut = 0;
 static PSCNameMapRec nameMapList = NULL;
 static int nameMapCount = 0;
 
@@ -87,11 +87,12 @@ static void *queue_handler_function(void *data);
 
 #endif /* MAKE_PROTO */
 void
-scardSetInfo(uint32 device, uint32 id, uint32 bytes_out)
+scardSetInfo(uint32 epoch, uint32 device, uint32 id, uint32 bytes_out)
 {
 	curDevice = device;
 	curId = id;
 	curBytesOut = bytes_out;
+	curEpoch = epoch;
 }
 
 #ifndef MAKE_PROTO
@@ -1175,6 +1176,11 @@ TS_SCardGetStatusChange(STREAM in, STREAM out, RD_BOOL wide)
 	memset(myRsArray, 0, dwCount * sizeof(SERVER_SCARD_READERSTATE_A));
 	copyReaderState_ServerToMyPCSC(rsArray, myRsArray, (SERVER_DWORD) dwCount);
 
+	/* Workaround for a bug in pcsclite, timeout value of 0 is handled as INFINIT
+	   but is by Windows PCSC spec. used for polling current state.
+	 */
+	if (dwTimeout == 0)
+	  dwTimeout = 1;
 	rv = SCardGetStatusChange(myHContext, (MYPCSC_DWORD) dwTimeout,
 				  myRsArray, (MYPCSC_DWORD) dwCount);
 	copyReaderState_MyPCSCToServer(myRsArray, rsArray, (MYPCSC_DWORD) dwCount);
@@ -2451,6 +2457,7 @@ SC_addToQueue(RD_NTHANDLE handle, uint32 request, STREAM in, STREAM out)
 		data->memHandle = lcHandle;
 		data->device = curDevice;
 		data->id = curId;
+		data->epoch = curEpoch;
 		data->handle = handle;
 		data->request = request;
 		data->in = duplicateStream(&(data->memHandle), in, 0, SC_TRUE);
@@ -2522,7 +2529,14 @@ SC_deviceControl(PSCThreadData data)
 	size_t buffer_len = 0;
 	scard_device_control(data->handle, data->request, data->in, data->out);
 	buffer_len = (size_t) data->out->p - (size_t) data->out->data;
-	rdpdr_send_completion(data->device, data->id, 0, buffer_len, data->out->data, buffer_len);
+
+	/* if iorequest belongs to another epoch, don't send response
+	   back to server due to it's considered as abdonend.
+	 */
+	if (data->epoch == curEpoch)
+		rdpdr_send_completion(data->device, data->id, 0, buffer_len, data->out->data,
+				      buffer_len);
+
 	SC_destroyThreadData(data);
 }
 

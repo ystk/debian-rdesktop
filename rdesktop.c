@@ -109,6 +109,7 @@ RD_BOOL g_seamless_rdp = False;
 RD_BOOL g_use_password_as_pin = False;
 char g_seamless_shell[512];
 char g_seamless_spawn_cmd[512];
+RD_BOOL g_seamless_persistent_mode = True;
 RD_BOOL g_user_quit = False;
 uint32 g_embed_wnd;
 uint32 g_rdp5_performanceflags =
@@ -554,7 +555,10 @@ main(int argc, char *argv[])
 	act.sa_flags = 0;
 	sigaction(SIGPIPE, &act, NULL);
 
-	flags = RDP_LOGON_NORMAL;
+	/* setup default flags for TS_INFO_PACKET */
+	flags = RDP_INFO_MOUSE | RDP_INFO_DISABLECTRLALTDEL
+		| RDP_INFO_UNICODE | RDP_INFO_MAXIMIZESHELL | RDP_INFO_ENABLEWINDOWSKEY;
+
 	prompt_password = False;
 	g_seamless_spawn_cmd[0] = domain[0] = g_password[0] = shell[0] = directory[0] = 0;
 	g_embed_wnd = 0;
@@ -610,6 +614,7 @@ main(int argc, char *argv[])
 
 			case 's':
 				STRNCPY(shell, optarg, sizeof(shell));
+				g_seamless_persistent_mode = False;
 				break;
 
 			case 'c':
@@ -624,7 +629,7 @@ main(int argc, char *argv[])
 				}
 
 				STRNCPY(g_password, optarg, sizeof(g_password));
-				flags |= RDP_LOGON_AUTO;
+				flags |= RDP_INFO_AUTOLOGON;
 
 				/* try to overwrite argument so it won't appear in ps */
 				p = optarg;
@@ -633,7 +638,7 @@ main(int argc, char *argv[])
 				break;
 #ifdef WITH_SCARD
 			case 'i':
-				flags |= RDP_LOGON_PASSWORD_IS_SC_PIN;
+				flags |= RDP_INFO_PASSWORD_IS_SC_PIN;
 				g_use_password_as_pin = True;
 				break;
 #endif
@@ -772,27 +777,30 @@ main(int argc, char *argv[])
 
 			case 'z':
 				DEBUG(("rdp compression enabled\n"));
-				flags |= (RDP_LOGON_COMPRESSION | RDP_LOGON_COMPRESSION2);
+				flags |= (RDP_INFO_COMPRESSION | RDP_INFO_COMPRESSION2);
 				break;
 
 			case 'x':
 				if (str_startswith(optarg, "m"))	/* modem */
 				{
-					g_rdp5_performanceflags =
+					g_rdp5_performanceflags = RDP5_NO_CURSOR_SHADOW |
 						RDP5_NO_WALLPAPER | RDP5_NO_FULLWINDOWDRAG |
 						RDP5_NO_MENUANIMATIONS | RDP5_NO_THEMING;
 				}
 				else if (str_startswith(optarg, "b"))	/* broadband */
 				{
-					g_rdp5_performanceflags = RDP5_NO_WALLPAPER;
+					g_rdp5_performanceflags =
+						RDP5_NO_CURSOR_SHADOW | RDP5_NO_WALLPAPER;
 				}
 				else if (str_startswith(optarg, "l"))	/* lan */
 				{
-					g_rdp5_performanceflags = RDP5_DISABLE_NOTHING;
+					g_rdp5_performanceflags =
+						RDP5_NO_CURSOR_SHADOW | RDP5_DISABLE_NOTHING;
 				}
 				else
 				{
-					g_rdp5_performanceflags = strtol(optarg, NULL, 16);
+					g_rdp5_performanceflags =
+						RDP5_NO_CURSOR_SHADOW | strtol(optarg, NULL, 16);
 				}
 				break;
 
@@ -812,7 +820,7 @@ main(int argc, char *argv[])
 						while ((p = next_arg(optarg, ',')))
 						{
 							if (str_startswith(optarg, "remote"))
-								flags |= RDP_LOGON_LEAVE_AUDIO;
+								flags |= RDP_INFO_REMOTE_CONSOLE_AUDIO;
 
 							if (str_startswith(optarg, "local"))
 #ifdef WITH_RDPSND
@@ -1059,7 +1067,7 @@ main(int argc, char *argv[])
 
 
 	if (prompt_password && read_password(g_password, sizeof(g_password)))
-		flags |= RDP_LOGON_AUTO;
+		flags |= RDP_INFO_AUTOLOGON;
 
 	if (g_title[0] == 0)
 	{
@@ -1118,7 +1126,7 @@ main(int argc, char *argv[])
 			g_username = (char *) xmalloc(strlen(g_redirect_username) + 1);
 			STRNCPY(g_username, g_redirect_username, strlen(g_redirect_username) + 1);
 			STRNCPY(server, g_redirect_server, sizeof(server));
-			flags |= RDP_LOGON_AUTO;
+			flags |= RDP_INFO_AUTOLOGON;
 
 			fprintf(stderr, "Redirected to %s@%s session %d.\n",
 				g_redirect_username, g_redirect_server, g_redirect_session_id);
@@ -1127,6 +1135,7 @@ main(int argc, char *argv[])
 			   and therefor we just clear this error before we connect to redirected server.
 			 */
 			g_network_error = False;
+			g_redirect = False;
 		}
 
 		ui_init_connection();
@@ -1151,6 +1160,11 @@ main(int argc, char *argv[])
 			continue;
 		}
 
+		if (g_redirect)
+		{
+			rdp_disconnect();
+			continue;
+		}
 
 		/* By setting encryption to False here, we have an encrypted login 
 		   packet but unencrypted transfer of other packets */
@@ -1163,7 +1177,6 @@ main(int argc, char *argv[])
 		tcp_run_ui(True);
 
 		deactivated = False;
-		g_redirect = False;
 		g_reconnect_loop = False;
 		rdp_main_loop(&deactivated, &ext_disc_reason);
 

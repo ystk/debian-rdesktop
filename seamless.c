@@ -3,7 +3,7 @@
    Seamless Windows support
    Copyright 2005-2008 Peter Astrand <astrand@cendio.se> for Cendio AB
    Copyright 2007-2008 Pierre Ossman <ossman@cendio.se> for Cendio AB
-   Copyright 2013 Henrik Andersson  <hean01@cendio.se> for Cendio AB   
+   Copyright 2013-2014 Henrik Andersson  <hean01@cendio.se> for Cendio AB   
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -32,6 +32,7 @@
 extern RD_BOOL g_seamless_rdp;
 static VCHANNEL *seamless_channel;
 static unsigned int seamless_serial;
+static char *seamless_rest = NULL;
 static char icon_buf[1024];
 
 static char *
@@ -172,6 +173,12 @@ seamless_process_line(const char *line, void *data)
 
 			icon_buf[len] = strtol(byte, NULL, 16);
 			len++;
+
+			if ((size_t)len >= sizeof(icon_buf))
+			{
+				warning("seamless_process_line(), icon data would overrun icon_buf");
+				break;
+			}
 		}
 
 		ui_seamless_seticon(id, tok5, width, height, chunk, icon_buf, len);
@@ -373,8 +380,13 @@ static void
 seamless_process(STREAM s)
 {
 	unsigned int pkglen;
-	static char *rest = NULL;
 	char *buf;
+	struct stream packet = *s;
+
+	if (!s_check(s))
+	{
+		rdp_protocol_error("seamless_process(), stream is in unstable state", &packet);
+	}
 
 	pkglen = s->end - s->p;
 	/* str_handle_lines requires null terminated strings */
@@ -385,7 +397,7 @@ seamless_process(STREAM s)
 	hexdump(s->p, pkglen);
 #endif
 
-	str_handle_lines(buf, &rest, seamless_line_handler, NULL);
+	str_handle_lines(buf, &seamless_rest, seamless_line_handler, NULL);
 
 	xfree(buf);
 }
@@ -405,6 +417,15 @@ seamless_init(void)
 	return (seamless_channel != NULL);
 }
 
+void
+seamless_reset_state(void)
+{
+	if (seamless_rest != NULL)
+	{
+		xfree(seamless_rest);
+		seamless_rest = NULL;
+	}
+}
 
 static unsigned int
 seamless_send(const char *command, const char *format, ...)
@@ -531,5 +552,17 @@ seamless_send_spawn(char *cmdline)
 
 	res = seamless_send("SPAWN", cmdline);
 
+	return res;
+}
+
+unsigned int
+seamless_send_persistent(RD_BOOL enable)
+{
+	unsigned int res;
+	if (!g_seamless_rdp)
+		return (unsigned int) -1;
+	printf("%s persistent seamless mode.\n", enable?"Enable":"Disable");
+	res = seamless_send("PERSISTENT", "%d", enable);
+	
 	return res;
 }
