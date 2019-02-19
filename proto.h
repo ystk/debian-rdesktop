@@ -173,6 +173,7 @@ RD_BOOL rdp_connect(char *server, uint32 flags, char *domain, char *password, ch
 		    char *directory, RD_BOOL reconnect);
 void rdp_reset_state(void);
 void rdp_disconnect(void);
+void rdp_protocol_error(const char *message, STREAM s);
 /* rdpdr.c */
 int get_device_index(RD_NTHANDLE handle);
 void convert_to_unix_filename(char *filename);
@@ -233,7 +234,7 @@ void tcp_run_ui(RD_BOOL run);
 /* asn.c */
 RD_BOOL ber_in_header(STREAM s, int *tagval, int *length);
 void ber_out_header(STREAM s, int tagval, int length);
-RD_BOOL ber_parse_header(STREAM s, int tagval, int *length);
+RD_BOOL ber_parse_header(STREAM s, int tagval, uint32 *length);
 void ber_out_integer(STREAM s, int value);
 
 /* xclip.c */
@@ -336,6 +337,7 @@ void ui_seamless_ack(unsigned int serial);
 RD_BOOL lspci_init(void);
 /* seamless.c */
 RD_BOOL seamless_init(void);
+void seamless_reset_state(void);
 unsigned int seamless_send_sync(void);
 unsigned int seamless_send_state(unsigned long id, unsigned int state, unsigned long flags);
 unsigned int seamless_send_position(unsigned long id, int x, int y, int width, int height,
@@ -345,12 +347,13 @@ unsigned int seamless_send_zchange(unsigned long id, unsigned long below, unsign
 unsigned int seamless_send_focus(unsigned long id, unsigned long flags);
 unsigned int seamless_send_destroy(unsigned long id);
 unsigned int seamless_send_spawn(char *cmd);
+unsigned int seamless_send_persistent(RD_BOOL);
 
 /* scard.c */
 void scard_lock(int lock);
 void scard_unlock(int lock);
 int scard_enum_devices(uint32 * id, char *optarg);
-void scardSetInfo(uint32 device, uint32 id, uint32 bytes_out);
+void scardSetInfo(uint32 epoch, uint32 device, uint32 id, uint32 bytes_out);
 void scard_reset_state();
 
 /* *INDENT-OFF* */

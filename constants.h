@@ -318,13 +318,16 @@ enum RDP_INPUT_DEVICE
 #define RDP_SOURCE		"MSTSC"
 
 /* Logon flags */
-#define RDP_LOGON_AUTO		0x0008
-#define RDP_LOGON_NORMAL	0x0033
-#define RDP_LOGON_COMPRESSION	0x0080	/* mppc compression with 8kB histroy buffer */
-#define RDP_LOGON_BLOB		0x0100
-#define RDP_LOGON_COMPRESSION2	0x0200	/* rdp5 mppc compression with 64kB history buffer */
-#define RDP_LOGON_LEAVE_AUDIO	0x2000
-#define RDP_LOGON_PASSWORD_IS_SC_PIN 0x40000
+#define RDP_INFO_MOUSE                0x00000001
+#define RDP_INFO_DISABLECTRLALTDEL    0x00000002
+#define RDP_INFO_AUTOLOGON 	      0x00000008
+#define RDP_INFO_UNICODE              0x00000010
+#define RDP_INFO_MAXIMIZESHELL        0x00000020
+#define RDP_INFO_COMPRESSION	      0x00000080	/* mppc compression with 8kB histroy buffer */
+#define RDP_INFO_ENABLEWINDOWSKEY     0x00000100
+#define RDP_INFO_COMPRESSION2	      0x00000200	/* rdp5 mppc compression with 64kB history buffer */
+#define RDP_INFO_REMOTE_CONSOLE_AUDIO 0x00002000
+#define RDP_INFO_PASSWORD_IS_SC_PIN   0x00040000
 
 #define RDP5_DISABLE_NOTHING	0x00
 #define RDP5_NO_WALLPAPER	0x01
@@ -447,6 +450,24 @@ enum RDP_INPUT_DEVICE
 #define TSSNDCAPS_VOLUME                   0x00000002
 
 /* RDPDR constants */
+
+#define RDPDR_CTYP_CORE                 0x4472
+#define RDPDR_CTYP_PRN                  0x5052
+
+#define PAKID_CORE_SERVER_ANNOUNCE      0x496e
+#define PAKID_CORE_CLIENTID_CONFIRM     0x4343
+#define PAKID_CORE_CLIENT_NAME          0x434e
+#define PAKID_CORE_DEVICE_LIST_ANNOUNCE 0x4441
+#define PAKID_CORE_DEVICE_REPLY         0x6472
+#define PAKID_CORE_DEVICE_IOREQUEST     0x4952
+#define PAKID_CORE_DEVICE_IOCOMPLETION  0x4943
+#define PAKID_CORE_SERVER_CAPABILITY    0x5350
+#define PAKID_CORE_CLIENT_CAPABILITY    0x4350
+#define PAKID_CORE_DEVICELIST_REMOVE    0x444d
+#define PAKID_PRN_CACHE_DATA            0x5043
+#define PAKID_CORE_USER_LOGGEDON        0x554c
+#define PAKID_PRN_USING_XPS             0x5543
+
 #define RDPDR_MAX_DEVICES               0x10
 #define DEVICE_TYPE_SERIAL              0x01
 #define DEVICE_TYPE_PARALLEL            0x02
@@ -459,6 +480,10 @@ enum RDP_INPUT_DEVICE
 #define FILE_COMPLETE_IF_OPLOCKED       0x00000100
 #define FILE_DELETE_ON_CLOSE            0x00001000
 #define FILE_OPEN_FOR_FREE_SPACE_QUERY  0x00800000
+
+/* [MS-RDPBCGR], TS_BITMAP_DATA, flags */
+#define BITMAP_COMPRESSION              0x0001
+#define NO_BITMAP_COMPRESSION_HDR       0x0400
 
 /* RDP5 disconnect PDU */
 #define exDiscReasonNoInfo				0x0000
