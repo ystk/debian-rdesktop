@@ -217,10 +217,8 @@ scard_enum_devices(uint32 * id, char *optarg)
 
 				tmpMap = nameMapList + nameMapCount - 1;
 
-				len = strlen(alias);
-				strncpy(tmpMap->alias, alias, (len > 127) ? (127) : (len));
-				len = strlen(name);
-				strncpy(tmpMap->name, name, (len > 127) ? (127) : (len));
+				STRNCPY(tmpMap->alias, alias, sizeof(tmpMap->alias));
+				STRNCPY(tmpMap->name, name, sizeof(tmpMap->name));
 
 				if (vendor)
 				{
@@ -228,8 +226,8 @@ scard_enum_devices(uint32 * id, char *optarg)
 					if (len > 0)
 					{
 						memset(tmpMap->vendor, 0, 128);
-						strncpy(tmpMap->vendor, vendor,
-							(len > 127) ? (127) : (len));
+						STRNCPY(tmpMap->vendor, vendor,
+							sizeof(tmpMap->vendor));
 					}
 					else
 						tmpMap->vendor[0] = '\0';
@@ -527,7 +525,7 @@ outBufferFinishWithLimit(STREAM out, char *buffer, unsigned int length, unsigned
 	{
 		if (header < length)
 			length = header;
-		out_uint8p(out, buffer, length);
+		out_uint8a(out, buffer, length);
 		outRepos(out, length);
 	}
 }
@@ -541,7 +539,7 @@ outBufferFinish(STREAM out, char *buffer, unsigned int length)
 static void
 outForceAlignment(STREAM out, unsigned int seed)
 {
-	SERVER_DWORD add = (seed - (out->p - out->data) % seed) % seed;
+	SERVER_DWORD add = (seed - s_tell(out) % seed) % seed;
 	if (add > 0)
 		out_uint8s(out, add);
 }
@@ -603,11 +601,11 @@ outString(STREAM out, char *source, RD_BOOL wide)
 				buffer[2 * i] = reader[i];
 			buffer[2 * i + 1] = '\0';
 		}
-		out_uint8p(out, buffer, 2 * dataLength);
+		out_uint8a(out, buffer, 2 * dataLength);
 	}
 	else
 	{
-		out_uint8p(out, reader, dataLength);
+		out_uint8a(out, reader, dataLength);
 	}
 
 	SC_xfreeallmemory(&lcHandle);
@@ -618,7 +616,7 @@ static void
 inReaderName(PMEM_HANDLE * handle, STREAM in, char **destination, RD_BOOL wide)
 {
 	SERVER_DWORD dataLength;
-	in->p += 0x08;
+	in_uint8s(in, 0x08);
 	in_uint32_le(in, dataLength);
 	inRepos(in, inString(handle, in, destination, dataLength, wide));
 }
@@ -692,6 +690,7 @@ TS_SCardEstablishContext(STREAM in, STREAM out)
 	out_uint32_le(out, 0x00000004);
 	out_uint32_le(out, hContext);
 	outForceAlignment(out, 8);
+	s_mark_end(out);
 	return rv;
 }
 
@@ -702,7 +701,7 @@ TS_SCardReleaseContext(STREAM in, STREAM out)
 	MYPCSC_SCARDCONTEXT myHContext;
 	SERVER_SCARDCONTEXT hContext;
 
-	in->p += 0x1C;
+	in_uint8s(in, 0x1C);
 	in_uint32_le(in, hContext);
 	myHContext = _scard_handle_list_get_pcsc_handle(hContext);
 
@@ -724,6 +723,7 @@ TS_SCardReleaseContext(STREAM in, STREAM out)
 	}
 
 	outForceAlignment(out, 8);
+	s_mark_end(out);
 	return rv;
 }
 
@@ -737,7 +737,7 @@ TS_SCardIsValidContext(STREAM in, STREAM out)
 	DWORD readerCount = 1024;
 	PMEM_HANDLE lcHandle = NULL;
 
-	in->p += 0x1C;
+	in_uint8s(in, 0x1C);
 	in_uint32_le(in, hContext);
 
 	myHContext = _scard_handle_list_get_pcsc_handle(hContext);
@@ -764,6 +764,7 @@ TS_SCardIsValidContext(STREAM in, STREAM out)
 	}
 
 	outForceAlignment(out, 8);
+	s_mark_end(out);
 	SC_xfreeallmemory(&lcHandle);
 	return rv;
 }
@@ -778,19 +779,19 @@ TS_SCardListReaders(STREAM in, STREAM out, RD_BOOL wide)
 	MYPCSC_SCARDCONTEXT myHContext;
 	SERVER_DWORD dataLength;
 	MYPCSC_DWORD cchReaders = readerArraySize;
-	unsigned char *plen1, *plen2, *pend;
+	size_t plen1, plen2, pend;
 	char *readers, *cur;
 	PMEM_HANDLE lcHandle = NULL;
 
-	in->p += 0x2C;
+	in_uint8s(in, 0x2C);
 	in_uint32_le(in, hContext);
 	myHContext = _scard_handle_list_get_pcsc_handle(hContext);
 	DEBUG_SCARD(("SCARD: SCardListReaders(context: 0x%08x [0x%lx])\n",
 		     (unsigned) hContext, myHContext));
-	plen1 = out->p;
+	plen1 = s_tell(out);
 	out_uint32_le(out, 0x00000000);	/* Temp value for data length as 0x0 */
 	out_uint32_le(out, 0x01760650);
-	plen2 = out->p;
+	plen2 = s_tell(out);
 	out_uint32_le(out, 0x00000000);	/* Temp value for data length as 0x0 */
 
 	dataLength = 0;
@@ -837,14 +838,17 @@ TS_SCardListReaders(STREAM in, STREAM out, RD_BOOL wide)
 	dataLength += outString(out, "\0", wide);
 	outRepos(out, dataLength);
 
-	pend = out->p;
-	out->p = plen1;
+	s_mark_end(out);
+
+	pend = s_tell(out);
+	s_seek(out, plen1);
 	out_uint32_le(out, dataLength);
-	out->p = plen2;
+	s_seek(out, plen2);
 	out_uint32_le(out, dataLength);
-	out->p = pend;
+	s_seek(out, pend);
 
 	outForceAlignment(out, 8);
+	s_mark_end(out);
 	SC_xfreeallmemory(&lcHandle);
 	return rv;
 }
@@ -865,11 +869,11 @@ TS_SCardConnect(STREAM in, STREAM out, RD_BOOL wide)
 	MYPCSC_DWORD dwActiveProtocol;
 	PMEM_HANDLE lcHandle = NULL;
 
-	in->p += 0x1C;
+	in_uint8s(in, 0x1C);
 	in_uint32_le(in, dwShareMode);
 	in_uint32_le(in, dwPreferredProtocol);
 	inReaderName(&lcHandle, in, &szReader, wide);
-	in->p += 0x04;
+	in_uint8s(in, 0x04);
 	in_uint32_le(in, hContext);
 
 	myHContext = _scard_handle_list_get_pcsc_handle(hContext);
@@ -929,6 +933,7 @@ TS_SCardConnect(STREAM in, STREAM out, RD_BOOL wide)
 	out_uint32_le(out, hCard);
 
 	outForceAlignment(out, 8);
+	s_mark_end(out);
 	SC_xfreeallmemory(&lcHandle);
 	return rv;
 }
@@ -945,13 +950,13 @@ TS_SCardReconnect(STREAM in, STREAM out)
 	SERVER_DWORD dwInitialization;
 	MYPCSC_DWORD dwActiveProtocol;
 
-	in->p += 0x20;
+	in_uint8s(in, 0x20);
 	in_uint32_le(in, dwShareMode);
 	in_uint32_le(in, dwPreferredProtocol);
 	in_uint32_le(in, dwInitialization);
-	in->p += 0x04;
+	in_uint8s(in, 0x04);
 	in_uint32_le(in, hContext);
-	in->p += 0x04;
+	in_uint8s(in, 0x04);
 	in_uint32_le(in, hCard);
 
 
@@ -971,6 +976,7 @@ TS_SCardReconnect(STREAM in, STREAM out)
 
 	out_uint32_le(out, (SERVER_DWORD) dwActiveProtocol);
 	outForceAlignment(out, 8);
+	s_mark_end(out);
 	return rv;
 }
 
@@ -984,11 +990,11 @@ TS_SCardDisconnect(STREAM in, STREAM out)
 	MYPCSC_SCARDHANDLE myHCard;
 	SERVER_DWORD dwDisposition;
 
-	in->p += 0x20;
+	in_uint8s(in, 0x20);
 	in_uint32_le(in, dwDisposition);
-	in->p += 0x04;
+	in_uint8s(in, 0x04);
 	in_uint32_le(in, hContext);
-	in->p += 0x04;
+	in_uint8s(in, 0x04);
 	in_uint32_le(in, hCard);
 
 	myHContext = _scard_handle_list_get_pcsc_handle(hContext);
@@ -1030,6 +1036,7 @@ TS_SCardDisconnect(STREAM in, STREAM out)
 	}
 
 	outForceAlignment(out, 8);
+	s_mark_end(out);
 	return rv;
 }
 
@@ -1116,12 +1123,12 @@ TS_SCardGetStatusChange(STREAM in, STREAM out, RD_BOOL wide)
 	long i;
 	PMEM_HANDLE lcHandle = NULL;
 
-	in->p += 0x18;
+	in_uint8s(in, 0x18);
 	in_uint32_le(in, dwTimeout);
 	in_uint32_le(in, dwCount);
-	in->p += 0x08;
+	in_uint8s(in, 0x08);
 	in_uint32_le(in, hContext);
-	in->p += 0x04;
+	in_uint8s(in, 0x04);
 
 	myHContext = _scard_handle_list_get_pcsc_handle(hContext);
 
@@ -1149,7 +1156,7 @@ TS_SCardGetStatusChange(STREAM in, STREAM out, RD_BOOL wide)
 			{
 				SERVER_DWORD dataLength;
 
-				in->p += 0x08;
+				in_uint8s(in, 0x08);
 				in_uint32_le(in, dataLength);
 				inRepos(in,
 					inString(&lcHandle, in, (char **) &(cur->szReader),
@@ -1211,10 +1218,11 @@ TS_SCardGetStatusChange(STREAM in, STREAM out, RD_BOOL wide)
 		cur->dwEventState = swap32(cur->dwEventState);
 		cur->cbAtr = swap32(cur->cbAtr);
 
-		out_uint8p(out, (void *) ((unsigned char **) cur + 2),
+		out_uint8a(out, (void *) ((unsigned char **) cur + 2),
 			   sizeof(SERVER_SCARD_READERSTATE_A) - 2 * sizeof(unsigned char *));
 	}
 	outForceAlignment(out, 8);
+	s_mark_end(out);
 	SC_xfreeallmemory(&lcHandle);
 	return rv;
 }
@@ -1226,7 +1234,7 @@ TS_SCardCancel(STREAM in, STREAM out)
 	SERVER_SCARDCONTEXT hContext;
 	MYPCSC_SCARDCONTEXT myHContext;
 
-	in->p += 0x1C;
+	in_uint8s(in, 0x1C);
 	in_uint32_le(in, hContext);
 
 	myHContext = _scard_handle_list_get_pcsc_handle(hContext);
@@ -1244,6 +1252,7 @@ TS_SCardCancel(STREAM in, STREAM out)
 		DEBUG_SCARD(("SCARD: -> Success\n"));
 	}
 	outForceAlignment(out, 8);
+	s_mark_end(out);
 	return rv;
 }
 
@@ -1264,7 +1273,7 @@ TS_SCardLocateCardsByATR(STREAM in, STREAM out, RD_BOOL wide)
 	MYPCSC_LPSCARD_READERSTATE_A myRsArray;
 	PMEM_HANDLE lcHandle = NULL;
 
-	in->p += 0x2C;
+	in_uint8s(in, 0x2C);
 	in_uint32_le(in, hContext);
 	in_uint32_le(in, atrMaskCount);
 	pAtrMasks = SC_xmalloc(&lcHandle, atrMaskCount * sizeof(SCARD_ATRMASK_L));
@@ -1381,11 +1390,12 @@ TS_SCardLocateCardsByATR(STREAM in, STREAM out, RD_BOOL wide)
 		rsCur->dwEventState = swap32(rsCur->dwEventState);
 		rsCur->cbAtr = swap32(rsCur->cbAtr);
 
-		out_uint8p(out, (void *) ((unsigned char **) rsCur + 2),
+		out_uint8a(out, (void *) ((unsigned char **) rsCur + 2),
 			   sizeof(SCARD_READERSTATE) - 2 * sizeof(unsigned char *));
 	}
 
 	outForceAlignment(out, 8);
+	s_mark_end(out);
 	SC_xfreeallmemory(&lcHandle);
 	return rv;
 }
@@ -1397,7 +1407,7 @@ TS_SCardBeginTransaction(STREAM in, STREAM out)
 	SERVER_SCARDCONTEXT hCard;
 	MYPCSC_SCARDCONTEXT myHCard;
 
-	in->p += 0x30;
+	in_uint8s(in, 0x30);
 	in_uint32_le(in, hCard);
 	myHCard = _scard_handle_list_get_pcsc_handle(hCard);
 	DEBUG_SCARD(("SCARD: SCardBeginTransaction(hcard: 0x%08x [0x%lx])\n",
@@ -1413,6 +1423,7 @@ TS_SCardBeginTransaction(STREAM in, STREAM out)
 		DEBUG_SCARD(("SCARD: -> Success\n"));
 	}
 	outForceAlignment(out, 8);
+	s_mark_end(out);
 	return rv;
 }
 
@@ -1424,9 +1435,9 @@ TS_SCardEndTransaction(STREAM in, STREAM out)
 	MYPCSC_SCARDCONTEXT myHCard;
 	SERVER_DWORD dwDisposition = 0;
 
-	in->p += 0x20;
+	in_uint8s(in, 0x20);
 	in_uint32_le(in, dwDisposition);
-	in->p += 0x0C;
+	in_uint8s(in, 0x0C);
 	in_uint32_le(in, hCard);
 
 	myHCard = _scard_handle_list_get_pcsc_handle(hCard);
@@ -1444,6 +1455,7 @@ TS_SCardEndTransaction(STREAM in, STREAM out)
 		DEBUG_SCARD(("SCARD: -> Success\n"));
 	}
 	outForceAlignment(out, 8);
+	s_mark_end(out);
 	return rv;
 }
 
@@ -1491,9 +1503,9 @@ TS_SCardTransmit(STREAM in, STREAM out)
 	MYPCSC_DWORD myCbRecvLength;
 	PMEM_HANDLE lcHandle = NULL;
 
-	in->p += 0x14;
+	in_uint8s(in, 0x14);
 	in_uint32_le(in, map[0]);
-	in->p += 0x04;
+	in_uint8s(in, 0x04);
 	in_uint32_le(in, map[1]);
 	pioSendPci = SC_xmalloc(&lcHandle, sizeof(SERVER_SCARD_IO_REQUEST));
 	if (!pioSendPci)
@@ -1508,7 +1520,7 @@ TS_SCardTransmit(STREAM in, STREAM out)
 	if (map[0] & INPUT_LINKED)
 		inSkipLinked(in);
 
-	in->p += 0x04;
+	in_uint8s(in, 0x04);
 	in_uint32_le(in, hCard);
 	myHCard = _scard_handle_list_get_pcsc_handle(hCard);
 
@@ -1656,6 +1668,7 @@ TS_SCardTransmit(STREAM in, STREAM out)
 		outBufferFinish(out, (char *) recvBuf, cbRecvLength);
 	}
 	outForceAlignment(out, 8);
+	s_mark_end(out);
 	SC_xfreeallmemory(&lcHandle);
 	return rv;
 }
@@ -1673,12 +1686,12 @@ TS_SCardStatus(STREAM in, STREAM out, RD_BOOL wide)
 	char *readerName;
 	unsigned char *atr;
 
-	in->p += 0x24;
+	in_uint8s(in, 0x24);
 	in_uint32_le(in, dwReaderLen);
 	in_uint32_le(in, dwAtrLen);
-	in->p += 0x0C;
+	in_uint8s(in, 0x0C);
 	in_uint32_le(in, hCard);
-	in->p += 0x04;
+	in_uint8s(in, 0x04);
 	myHCard = _scard_handle_list_get_pcsc_handle(hCard);
 	DEBUG_SCARD(("SCARD: SCardStatus(hcard: 0x%08x [0x%08lx], reader len: %d bytes, atr len: %d bytes)\n", (unsigned) hCard, (unsigned long) myHCard, (int) dwReaderLen, (int) dwAtrLen));
 
@@ -1756,31 +1769,33 @@ TS_SCardStatus(STREAM in, STREAM out, RD_BOOL wide)
 		else
 			dwState = 0x00000000;
 
-		void *p_len1 = out->p;
+		size_t p_len1 = s_tell(out);
 		out_uint32_le(out, dwReaderLen);
 		out_uint32_le(out, 0x00020000);
 		out_uint32_le(out, dwState);
 		out_uint32_le(out, dwProtocol);
-		out_uint8p(out, atr, dwAtrLen);
+		out_uint8a(out, atr, dwAtrLen);
 		if (dwAtrLen < 32)
 		{
 			out_uint8s(out, 32 - dwAtrLen);
 		}
 		out_uint32_le(out, dwAtrLen);
 
-		void *p_len2 = out->p;
+		size_t p_len2 = s_tell(out);
 		out_uint32_le(out, dwReaderLen);
 		dataLength = outString(out, readerName, wide);
 		dataLength += outString(out, "\0", wide);
 		outRepos(out, dataLength);
-		void *psave = out->p;
-		out->p = p_len1;
+		s_mark_end(out);
+		size_t psave = s_tell(out);
+		s_seek(out, p_len1);
 		out_uint32_le(out, dataLength);
-		out->p = p_len2;
+		s_seek(out, p_len2);
 		out_uint32_le(out, dataLength);
-		out->p = psave;
+		s_seek(out, psave);
 	}
 	outForceAlignment(out, 8);
+	s_mark_end(out);
 	SC_xfreeallmemory(&lcHandle);
 	return rv;
 }
@@ -1797,11 +1812,11 @@ TS_SCardState(STREAM in, STREAM out)
 	char *readerName;
 	unsigned char *atr;
 
-	in->p += 0x24;
+	in_uint8s(in, 0x24);
 	in_uint32_le(in, dwAtrLen);
-	in->p += 0x0C;
+	in_uint8s(in, 0x0C);
 	in_uint32_le(in, hCard);
-	in->p += 0x04;
+	in_uint8s(in, 0x04);
 	myHCard = _scard_handle_list_get_pcsc_handle(hCard);
 
 	DEBUG_SCARD(("SCARD: SCardState(hcard: 0x%08x [0x%08lx], atr len: %d bytes)\n",
@@ -1874,10 +1889,11 @@ TS_SCardState(STREAM in, STREAM out)
 		out_uint32_le(out, dwAtrLen);
 		out_uint32_le(out, 0x00000001);
 		out_uint32_le(out, dwAtrLen);
-		out_uint8p(out, atr, dwAtrLen);
+		out_uint8a(out, atr, dwAtrLen);
 		outRepos(out, dwAtrLen);
 	}
 	outForceAlignment(out, 8);
+	s_mark_end(out);
 	SC_xfreeallmemory(&lcHandle);
 	return rv;
 }
@@ -1899,9 +1915,9 @@ TS_SCardListReaderGroups(STREAM in, STREAM out)
 	char *szGroups;
 	PMEM_HANDLE lcHandle = NULL;
 
-	in->p += 0x20;
+	in_uint8s(in, 0x20);
 	in_uint32_le(in, dwGroups);
-	in->p += 0x04;
+	in_uint8s(in, 0x04);
 	in_uint32_le(in, hContext);
 
 	myHContext = _scard_handle_list_get_pcsc_handle(hContext);
@@ -1947,6 +1963,7 @@ TS_SCardListReaderGroups(STREAM in, STREAM out)
 	out_uint32_le(out, 0x00000000);
 
 	outForceAlignment(out, 8);
+	s_mark_end(out);
 	SC_xfreeallmemory(&lcHandle);
 	return rv;
 }
@@ -1963,11 +1980,11 @@ TS_SCardGetAttrib(STREAM in, STREAM out)
 	unsigned char *pbAttr;
 	PMEM_HANDLE lcHandle = NULL;
 
-	in->p += 0x20;
+	in_uint8s(in, 0x20);
 	in_uint32_le(in, dwAttrId);
-	in->p += 0x04;
+	in_uint8s(in, 0x04);
 	in_uint32_le(in, dwAttrLen);
-	in->p += 0x0C;
+	in_uint8s(in, 0x0C);
 	in_uint32_le(in, hCard);
 	myHCard = _scard_handle_list_get_pcsc_handle(hCard);
 
@@ -2016,12 +2033,13 @@ TS_SCardGetAttrib(STREAM in, STREAM out)
 		}
 		else
 		{
-			out_uint8p(out, pbAttr, dwAttrLen);
+			out_uint8a(out, pbAttr, dwAttrLen);
 		}
 		outRepos(out, dwAttrLen);
 		out_uint32_le(out, 0x00000000);
 	}
 	outForceAlignment(out, 8);
+	s_mark_end(out);
 	return rv;
 }
 
@@ -2038,11 +2056,11 @@ TS_SCardSetAttrib(STREAM in, STREAM out)
 	unsigned char *pbAttr;
 	PMEM_HANDLE lcHandle = NULL;
 
-	in->p += 0x20;
+	in_uint8s(in, 0x20);
 	in_uint32_le(in, dwAttrId);
-	in->p += 0x04;
+	in_uint8s(in, 0x04);
 	in_uint32_le(in, dwAttrLen);
-	in->p += 0x0C;
+	in_uint8s(in, 0x0C);
 	in_uint32_le(in, hCard);
 	myHCard = scHandleToMyPCSC(hCard);
 
@@ -2075,6 +2093,7 @@ TS_SCardSetAttrib(STREAM in, STREAM out)
 	out_uint32_le(out, 0x00000000);
 	out_uint32_le(out, 0x00000000);
 	outForceAlignment(out, 8);
+	s_mark_end(out);
 	SC_xfreeallmemory(&lcHandle);
 	return rv;
 }
@@ -2100,18 +2119,18 @@ TS_SCardControl(STREAM in, STREAM out)
 	pInBuffer = NULL;
 	pOutBuffer = NULL;
 
-	in->p += 0x14;
+	in_uint8s(in, 0x14);
 	in_uint32_le(in, map[0]);
-	in->p += 0x04;
+	in_uint8s(in, 0x04);
 	in_uint32_le(in, map[1]);
 	in_uint32_le(in, dwControlCode);
 	in_uint32_le(in, nInBufferSize);
 	in_uint32_le(in, map[2]);
-	in->p += 0x04;
+	in_uint8s(in, 0x04);
 	in_uint32_le(in, nOutBufferSize);
-	in->p += 0x04;
+	in_uint8s(in, 0x04);
 	in_uint32_le(in, hContext);
-	in->p += 0x04;
+	in_uint8s(in, 0x04);
 	in_uint32_le(in, hCard);
 	if (map[2] & INPUT_LINKED)
 	{
@@ -2204,11 +2223,12 @@ TS_SCardControl(STREAM in, STREAM out)
 	out_uint32_le(out, nBytesReturned);
 	if (nBytesReturned > 0)
 	{
-		out_uint8p(out, pOutBuffer, nBytesReturned);
+		out_uint8a(out, pOutBuffer, nBytesReturned);
 		outRepos(out, nBytesReturned);
 	}
 
 	outForceAlignment(out, 8);
+	s_mark_end(out);
 	SC_xfreeallmemory(&lcHandle);
 	return rv;
 }
@@ -2226,17 +2246,17 @@ static RD_NTSTATUS
 scard_device_control(RD_NTHANDLE handle, uint32 request, STREAM in, STREAM out)
 {
 	SERVER_DWORD Result = 0x00000000;
-	unsigned char *psize, *pend, *pStatusCode;
+	size_t psize, pend, pStatusCode;
 	SERVER_DWORD addToEnd = 0;
 
 	/* Processing request */
 
 	out_uint32_le(out, 0x00081001);	/* Header lines */
 	out_uint32_le(out, 0xCCCCCCCC);
-	psize = out->p;
+	psize = s_tell(out);
 	out_uint32_le(out, 0x00000000);	/* Size of data portion */
 	out_uint32_le(out, 0x00000000);	/* Zero bytes (may be usefull) */
-	pStatusCode = out->p;
+	pStatusCode = s_tell(out);
 	out_uint32_le(out, 0x00000000);	/* Status Code */
 
 	switch (request)
@@ -2370,21 +2390,24 @@ scard_device_control(RD_NTHANDLE handle, uint32 request, STREAM in, STREAM out)
 #if 0
 	out_uint32_le(out, 0x00000000);
 #endif
+	s_mark_end(out);
+
 	/* Setting modified variables */
-	pend = out->p;
+	pend = s_tell(out);
 	/* setting data size */
-	out->p = psize;
+	s_seek(out, psize);
 	out_uint32_le(out, pend - psize - 16);
 	/* setting status code */
-	out->p = pStatusCode;
+	s_seek(out, pStatusCode);
 	out_uint32_le(out, Result);
 	/* finish */
-	out->p = pend;
+	s_seek(out, pend);
 
 	addToEnd = (pend - pStatusCode) % 16;
 	if (addToEnd < 16 && addToEnd > 0)
 	{
 		out_uint8s(out, addToEnd);
+		s_mark_end(out);
 	}
 
 	return RD_STATUS_SUCCESS;
@@ -2395,6 +2418,7 @@ scard_device_control(RD_NTHANDLE handle, uint32 request, STREAM in, STREAM out)
 static STREAM
 duplicateStream(PMEM_HANDLE * handle, STREAM s, uint32 buffer_size, RD_BOOL isInputStream)
 {
+	// FIXME: Shouldn't be allocating streams manually
 	STREAM d = SC_xmalloc(handle, sizeof(struct stream));
 	if (d != NULL)
 	{
@@ -2528,14 +2552,19 @@ SC_deviceControl(PSCThreadData data)
 {
 	size_t buffer_len = 0;
 	scard_device_control(data->handle, data->request, data->in, data->out);
-	buffer_len = (size_t) data->out->p - (size_t) data->out->data;
+	buffer_len = s_tell(data->out);
 
 	/* if iorequest belongs to another epoch, don't send response
 	   back to server due to it's considered as abdonend.
 	 */
 	if (data->epoch == curEpoch)
-		rdpdr_send_completion(data->device, data->id, 0, buffer_len, data->out->data,
+	{
+		uint8 *buf;
+		s_seek(data->out, 0);
+		in_uint8p(data->out, buf, buffer_len);
+		rdpdr_send_completion(data->device, data->id, 0, buffer_len, buf,
 				      buffer_len);
+	}
 
 	SC_destroyThreadData(data);
 }

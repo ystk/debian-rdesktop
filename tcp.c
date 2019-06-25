@@ -51,19 +51,12 @@
 #define INADDR_NONE ((unsigned long) -1)
 #endif
 
-#ifdef WITH_SCARD
-#define STREAM_COUNT 8
-#else
-#define STREAM_COUNT 1
-#endif
-
 static RD_BOOL g_ssl_initialized = False;
 static SSL *g_ssl = NULL;
 static SSL_CTX *g_ssl_ctx = NULL;
 static int g_sock;
 static RD_BOOL g_run_ui = False;
 static struct stream g_in;
-static struct stream g_out[STREAM_COUNT];
 int g_tcp_port_rdp = TCP_PORT_RDP;
 extern RD_BOOL g_user_quit;
 extern RD_BOOL g_network_error;
@@ -93,27 +86,7 @@ tcp_can_send(int sck, int millis)
 STREAM
 tcp_init(uint32 maxlen)
 {
-	static int cur_stream_id = 0;
-	STREAM result = NULL;
-
-#ifdef WITH_SCARD
-	scard_lock(SCARD_LOCK_TCP);
-#endif
-	result = &g_out[cur_stream_id];
-	cur_stream_id = (cur_stream_id + 1) % STREAM_COUNT;
-
-	if (maxlen > result->size)
-	{
-		result->data = (uint8 *) xrealloc(result->data, maxlen);
-		result->size = maxlen;
-	}
-
-	result->p = result->data;
-	result->end = result->data + result->size;
-#ifdef WITH_SCARD
-	scard_unlock(SCARD_LOCK_TCP);
-#endif
-	return result;
+	return s_alloc(maxlen);
 }
 
 /* Send TCP transport data packet */
@@ -121,8 +94,10 @@ void
 tcp_send(STREAM s)
 {
 	int ssl_err;
-	int length = s->end - s->data;
-	int sent, total = 0;
+	size_t before;
+	int length;
+	int sent;
+	unsigned char *data;
 
 	if (g_network_error == True)
 		return;
@@ -130,11 +105,17 @@ tcp_send(STREAM s)
 #ifdef WITH_SCARD
 	scard_lock(SCARD_LOCK_TCP);
 #endif
-	while (total < length)
+	s_seek(s, 0);
+
+	while (!s_check_end(s))
 	{
+		before = s_tell(s);
+		length = s_remaining(s);
+		in_uint8p(s, data, length);
+
 		if (g_ssl)
 		{
-			sent = SSL_write(g_ssl, s->data + total, length - total);
+			sent = SSL_write(g_ssl, data, length);
 			if (sent <= 0)
 			{
 				ssl_err = SSL_get_error(g_ssl, sent);
@@ -158,7 +139,7 @@ tcp_send(STREAM s)
 		}
 		else
 		{
-			sent = send(g_sock, s->data + total, length - total, 0);
+			sent = send(g_sock, data, length, 0);
 			if (sent <= 0)
 			{
 				if (sent == -1 && TCP_BLOCKS)
@@ -178,7 +159,9 @@ tcp_send(STREAM s)
 				}
 			}
 		}
-		total += sent;
+
+		/* Everything might not have been sent */
+		s_seek(s, before + sent);
 	}
 #ifdef WITH_SCARD
 	scard_unlock(SCARD_LOCK_TCP);
@@ -189,7 +172,8 @@ tcp_send(STREAM s)
 STREAM
 tcp_recv(STREAM s, uint32 length)
 {
-	uint32 new_length, end_offset, p_offset;
+	size_t before;
+	unsigned char *data;
 	int rcvd = 0, ssl_err;
 
 	if (g_network_error == True)
@@ -198,27 +182,14 @@ tcp_recv(STREAM s, uint32 length)
 	if (s == NULL)
 	{
 		/* read into "new" stream */
-		if (length > g_in.size)
-		{
-			g_in.data = (uint8 *) xrealloc(g_in.data, length);
-			g_in.size = length;
-		}
-		g_in.end = g_in.p = g_in.data;
+		s_realloc(&g_in, length);
+		s_reset(&g_in);
 		s = &g_in;
 	}
 	else
 	{
 		/* append to existing stream */
-		new_length = (s->end - s->data) + length;
-		if (new_length > s->size)
-		{
-			p_offset = s->p - s->data;
-			end_offset = s->end - s->data;
-			s->data = (uint8 *) xrealloc(s->data, new_length);
-			s->size = new_length;
-			s->p = s->data + p_offset;
-			s->end = s->data + end_offset;
-		}
+		s_realloc(s, s_length(s) + length);
 	}
 
 	while (length > 0)
@@ -233,9 +204,16 @@ tcp_recv(STREAM s, uint32 length)
 			}
 		}
 
+		before = s_tell(s);
+		s_seek(s, s_length(s));
+
+		out_uint8p(s, data, length);
+
+		s_seek(s, before);
+
 		if (g_ssl)
 		{
-			rcvd = SSL_read(g_ssl, s->end, length);
+			rcvd = SSL_read(g_ssl, data, length);
 			ssl_err = SSL_get_error(g_ssl, rcvd);
 
 			if (ssl_err == SSL_ERROR_SSL)
@@ -265,7 +243,7 @@ tcp_recv(STREAM s, uint32 length)
 		}
 		else
 		{
-			rcvd = recv(g_sock, s->end, length, 0);
+			rcvd = recv(g_sock, data, length, 0);
 			if (rcvd < 0)
 			{
 				if (rcvd == -1 && TCP_BLOCKS)
@@ -286,6 +264,7 @@ tcp_recv(STREAM s, uint32 length)
 			}
 		}
 
+		// FIXME: Should probably have a macro for this
 		s->end += rcvd;
 		length -= rcvd;
 	}
@@ -369,14 +348,15 @@ tcp_tls_connect(void)
 }
 
 /* Get public key from server of TLS 1.0 connection */
-RD_BOOL
-tcp_tls_get_server_pubkey(STREAM s)
+STREAM
+tcp_tls_get_server_pubkey()
 {
 	X509 *cert = NULL;
 	EVP_PKEY *pkey = NULL;
 
-	s->data = s->p = NULL;
-	s->size = 0;
+	size_t len;
+	unsigned char *data;
+	STREAM s = NULL;
 
 	if (g_ssl == NULL)
 		goto out;
@@ -395,24 +375,25 @@ tcp_tls_get_server_pubkey(STREAM s)
 		goto out;
 	}
 
-	s->size = i2d_PublicKey(pkey, NULL);
-	if (s->size < 1)
+	len = i2d_PublicKey(pkey, NULL);
+	if (len < 1)
 	{
 		error("tcp_tls_get_server_pubkey: i2d_PublicKey() failed\n");
 		goto out;
 	}
 
-	s->data = s->p = xmalloc(s->size);
-	i2d_PublicKey(pkey, &s->p);
-	s->p = s->data;
-	s->end = s->p + s->size;
+	s = s_alloc(len);
+	out_uint8p(s, data, len);
+	i2d_PublicKey(pkey, &data);
+	s_mark_end(s);
+	s_seek(s, 0);
 
       out:
 	if (cert)
 		X509_free(cert);
 	if (pkey)
 		EVP_PKEY_free(pkey);
-	return (s->size != 0);
+	return s;
 }
 
 /* Establish a connection on the TCP layer */
@@ -421,7 +402,6 @@ tcp_connect(char *server)
 {
 	socklen_t option_len;
 	uint32 option_value;
-	int i;
 
 #ifdef IPv6
 
@@ -517,12 +497,6 @@ tcp_connect(char *server)
 	g_in.size = 4096;
 	g_in.data = (uint8 *) xmalloc(g_in.size);
 
-	for (i = 0; i < STREAM_COUNT; i++)
-	{
-		g_out[i].size = 4096;
-		g_out[i].data = (uint8 *) xmalloc(g_out[i].size);
-	}
-
 	return True;
 }
 
@@ -575,8 +549,6 @@ tcp_is_connected()
 void
 tcp_reset_state(void)
 {
-	int i;
-
 	/* Clear the incoming stream */
 	if (g_in.data != NULL)
 		xfree(g_in.data);
@@ -589,22 +561,6 @@ tcp_reset_state(void)
 	g_in.sec_hdr = NULL;
 	g_in.rdp_hdr = NULL;
 	g_in.channel_hdr = NULL;
-
-	/* Clear the outgoing stream(s) */
-	for (i = 0; i < STREAM_COUNT; i++)
-	{
-		if (g_out[i].data != NULL)
-			xfree(g_out[i].data);
-		g_out[i].p = NULL;
-		g_out[i].end = NULL;
-		g_out[i].data = NULL;
-		g_out[i].size = 0;
-		g_out[i].iso_hdr = NULL;
-		g_out[i].mcs_hdr = NULL;
-		g_out[i].sec_hdr = NULL;
-		g_out[i].rdp_hdr = NULL;
-		g_out[i].channel_hdr = NULL;
-	}
 }
 
 void
