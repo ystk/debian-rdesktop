@@ -58,7 +58,7 @@ extern RD_BOOL g_numlock_sync;
 extern RD_BOOL g_pending_resize;
 extern RD_BOOL g_network_error;
 
-uint8 *g_next_packet;
+size_t g_next_packet;
 uint32 g_rdp_shareid;
 
 extern RDPCOMP g_mppc_dict;
@@ -102,14 +102,14 @@ rdp_recv(uint8 * type)
 	uint16 length, pdu_type;
 	uint8 rdpver;
 
-	if ((rdp_s == NULL) || (g_next_packet >= rdp_s->end) || (g_next_packet == NULL))
+	if ((g_next_packet == 0) || (g_next_packet == s_length(rdp_s)))
 	{
 		rdp_s = sec_recv(&rdpver);
 		if (rdp_s == NULL)
 			return NULL;
 		if (rdpver == 0xff)
 		{
-			g_next_packet = rdp_s->end;
+			g_next_packet = s_length(rdp_s);
 			*type = 0;
 			return rdp_s;
 		}
@@ -121,11 +121,11 @@ rdp_recv(uint8 * type)
 			return rdp_s;
 		}
 
-		g_next_packet = rdp_s->p;
+		g_next_packet = s_tell(rdp_s);
 	}
 	else
 	{
-		rdp_s->p = g_next_packet;
+		s_seek(rdp_s, g_next_packet);
 	}
 
 	in_uint16_le(rdp_s, length);
@@ -142,10 +142,11 @@ rdp_recv(uint8 * type)
 
 #if WITH_DEBUG
 	DEBUG(("RDP packet #%d, (type %x)\n", ++g_packetno, *type));
-	hexdump(g_next_packet, length);
+	hexdump(rdp_s->data + g_next_packet, length);
 #endif /*  */
 
 	g_next_packet += length;
+
 	return rdp_s;
 }
 
@@ -168,7 +169,7 @@ rdp_send_data(STREAM s, uint8 data_pdu_type)
 	uint16 length;
 
 	s_pop_layer(s, rdp_hdr);
-	length = s->end - s->p;
+	length = s_remaining(s);
 
 	out_uint16_le(s, length);
 	out_uint16_le(s, (RDP_PDU_DATA | 0x10));
@@ -195,37 +196,29 @@ rdp_out_unistr(STREAM s, char *string, int len)
 #ifdef HAVE_ICONV
 	size_t ibl = strlen(string), obl = len + 2;
 	static iconv_t iconv_h = (iconv_t) - 1;
-	char *pin = string, *pout = (char *) s->p;
+	char *pin = string, *pout;
+	size_t start;
 
-	memset(pout, 0, len + 4);
+	start = s_tell(s);
+	out_uint8p(s, pout, len + 2);
+	// FIXME: hack so that s_seek() works
+	s_mark_end(s);
+	memset(pout, 0, len + 2);
 
 	if (g_iconv_works)
 	{
 		if (iconv_h == (iconv_t) - 1)
 		{
-			size_t i = 1, o = 4;
 			if ((iconv_h = iconv_open(WINDOWS_CODEPAGE, g_codepage)) == (iconv_t) - 1)
 			{
 				warning("rdp_out_unistr: iconv_open[%s -> %s] fail %p\n",
 					g_codepage, WINDOWS_CODEPAGE, iconv_h);
 
 				g_iconv_works = False;
+				s_seek(s, start);
 				rdp_out_unistr(s, string, len);
 				return;
 			}
-			if (iconv(iconv_h, (ICONV_CONST char **) &pin, &i, &pout, &o) ==
-			    (size_t) - 1)
-			{
-				iconv_close(iconv_h);
-				iconv_h = (iconv_t) - 1;
-				warning("rdp_out_unistr: iconv(1) fail, errno %d\n", errno);
-
-				g_iconv_works = False;
-				rdp_out_unistr(s, string, len);
-				return;
-			}
-			pin = string;
-			pout = (char *) s->p;
 		}
 
 		if (iconv(iconv_h, (ICONV_CONST char **) &pin, &ibl, &pout, &obl) == (size_t) - 1)
@@ -235,12 +228,10 @@ rdp_out_unistr(STREAM s, char *string, int len)
 			warning("rdp_out_unistr: iconv(2) fail, errno %d\n", errno);
 
 			g_iconv_works = False;
+			s_seek(s, start);
 			rdp_out_unistr(s, string, len);
 			return;
 		}
-
-		s->p += len + 2;
-
 	}
 	else
 #endif
@@ -251,11 +242,10 @@ rdp_out_unistr(STREAM s, char *string, int len)
 
 		while (i < len)
 		{
-			s->p[i++] = string[j++];
-			s->p[i++] = 0;
+			out_uint8(s, string[j++]);
+			out_uint8(s, 0);
+			i += 2;
 		}
-
-		s->p += len;
 	}
 }
 
@@ -278,16 +268,31 @@ rdp_in_unistr(STREAM s, int in_len, char **string, uint32 * str_size)
 		abort();
 	}
 
+	/* Corner case. We still want to return a null terminated string... */
+	if (in_len == 0) {
+		if (*string == NULL)
+		{
+			*string = xmalloc(1);
+		}
+		**string = '\0';
+		*str_size = 0;
+		return;
+	}
+
 	if (!s_check_rem(s, in_len))
 	{
-		rdp_protocol_error("rdp_in_unistr(), consume of unicode data from stream would overrun", &packet);
+		rdp_protocol_error("consume of unicode data from stream would overrun", &packet);
 	}
 
 
 #ifdef HAVE_ICONV
 	size_t ibl = in_len, obl = *str_size - 1;
-	char *pin = (char *) s->p, *pout = *string;
+	char *pin, *pout = *string;
 	static iconv_t iconv_h = (iconv_t) - 1;
+	size_t start;
+
+	start = s_tell(s);
+	in_uint8p(s, pin, in_len);
 
 	if (g_iconv_works)
 	{
@@ -299,6 +304,7 @@ rdp_in_unistr(STREAM s, int in_len, char **string, uint32 * str_size)
 					WINDOWS_CODEPAGE, g_codepage, iconv_h);
 
 				g_iconv_works = False;
+				s_seek(s, start);
 				return rdp_in_unistr(s, in_len, string, str_size);
 			}
 		}
@@ -318,9 +324,6 @@ rdp_in_unistr(STREAM s, int in_len, char **string, uint32 * str_size)
 				*str_size = 0;
 			}
 		}
-
-		/* we must update the location of the current STREAM for future reads of s->p */
-		s->p += in_len;
 
 		*pout = 0;
 
@@ -470,7 +473,7 @@ rdp_send_logon_info(uint32 flags, char *domain, char *user,
 		{
 			if (g_redirect == True && 0 < g_redirect_cookie_len)
 			{
-				out_uint8p(s, g_redirect_cookie, g_redirect_cookie_len);
+				out_uint8a(s, g_redirect_cookie, g_redirect_cookie_len);
 			}
 			else
 			{
@@ -543,6 +546,7 @@ rdp_send_logon_info(uint32 flags, char *domain, char *user,
 	g_redirect = False;
 
 	sec_send(s, sec_flags);
+	s_free(s);
 }
 
 /* Send a control PDU */
@@ -559,6 +563,7 @@ rdp_send_control(uint16 action)
 
 	s_mark_end(s);
 	rdp_send_data(s, RDP_DATA_PDU_CONTROL);
+	s_free(s);
 }
 
 /* Send a synchronisation PDU */
@@ -574,6 +579,7 @@ rdp_send_synchronise(void)
 
 	s_mark_end(s);
 	rdp_send_data(s, RDP_DATA_PDU_SYNCHRONISE);
+	s_free(s);
 }
 
 /* Send a single input event */
@@ -595,6 +601,7 @@ rdp_send_input(uint32 time, uint16 message_type, uint16 device_flags, uint16 par
 
 	s_mark_end(s);
 	rdp_send_data(s, RDP_DATA_PDU_INPUT);
+	s_free(s);
 }
 
 /* Send a client window information PDU */
@@ -625,6 +632,7 @@ rdp_send_client_window_status(int status)
 
 	s_mark_end(s);
 	rdp_send_data(s, RDP_DATA_PDU_CLIENT_WINDOW_STATUS);
+	s_free(s);
 	current_status = status;
 }
 
@@ -667,6 +675,7 @@ rdp_enum_bmpcache2(void)
 
 		s_mark_end(s);
 		rdp_send_data(s, 0x2b);
+		s_free(s);
 
 		offset += 169;
 	}
@@ -687,6 +696,7 @@ rdp_send_fonts(uint16 seq)
 
 	s_mark_end(s);
 	rdp_send_data(s, RDP_DATA_PDU_FONT2);
+	s_free(s);
 }
 
 /* Output general capability set */
@@ -770,7 +780,7 @@ rdp_out_order_caps(STREAM s)
 	out_uint16_le(s, 1);	/* Max order level */
 	out_uint16_le(s, 0x147);	/* Number of fonts */
 	out_uint16_le(s, 0x2a);	/* Capability flags */
-	out_uint8p(s, order_caps, 32);	/* Orders supported */
+	out_uint8a(s, order_caps, 32);	/* Orders supported */
 	out_uint16_le(s, 0x6a1);	/* Text capability flags */
 	out_uint8s(s, 6);	/* Pad */
 	out_uint32_le(s, g_desktop_save == False ? 0 : 0x38400);	/* Desktop cache size */
@@ -935,7 +945,7 @@ rdp_out_unknown_caps(STREAM s, uint16 id, uint16 length, uint8 * caps)
 	out_uint16_le(s, id);
 	out_uint16_le(s, length);
 
-	out_uint8p(s, caps, length - 4);
+	out_uint8a(s, caps, length - 4);
 }
 
 #define RDP5_FLAG 0x0030
@@ -975,7 +985,7 @@ rdp_send_confirm_active(void)
 	out_uint16_le(s, sizeof(RDP_SOURCE));
 	out_uint16_le(s, caplen);
 
-	out_uint8p(s, RDP_SOURCE, sizeof(RDP_SOURCE));
+	out_uint8a(s, RDP_SOURCE, sizeof(RDP_SOURCE));
 	out_uint16_le(s, 0xe);	/* num_caps */
 	out_uint8s(s, 2);	/* pad */
 
@@ -1005,6 +1015,7 @@ rdp_send_confirm_active(void)
 
 	s_mark_end(s);
 	sec_send(s, sec_flags);
+	s_free(s);
 }
 
 /* Process a general capability set */
@@ -1059,23 +1070,23 @@ static void
 rdp_process_server_caps(STREAM s, uint16 length)
 {
 	int n;
-	uint8 *next, *start;
+	size_t next, start;
 	uint16 ncapsets, capset_type, capset_length;
 
-	start = s->p;
+	start = s_tell(s);
 
 	in_uint16_le(s, ncapsets);
 	in_uint8s(s, 2);	/* pad */
 
 	for (n = 0; n < ncapsets; n++)
 	{
-		if (s->p > start + length)
+		if (s_tell(s) > start + length)
 			return;
 
 		in_uint16_le(s, capset_type);
 		in_uint16_le(s, capset_length);
 
-		next = s->p + capset_length - 4;
+		next = s_tell(s) + capset_length - 4;
 
 		switch (capset_type)
 		{
@@ -1088,7 +1099,7 @@ rdp_process_server_caps(STREAM s, uint16 length)
 				break;
 		}
 
-		s->p = next;
+		s_seek(s, next);
 	}
 }
 
@@ -1109,7 +1120,7 @@ process_demand_active(STREAM s)
 
 	if (!s_check_rem(s, len_src_descriptor))
 	{
-		rdp_protocol_error("rdp_demand_active(), consume of source descriptor from stream would overrun", &packet);
+		rdp_protocol_error("consume of source descriptor from stream would overrun", &packet);
 	}
 	in_uint8s(s, len_src_descriptor);
 
@@ -1233,8 +1244,7 @@ process_pointer_pdu(STREAM s)
 		case RDP_POINTER_MOVE:
 			in_uint16_le(s, x);
 			in_uint16_le(s, y);
-			if (s_check(s))
-				ui_move_pointer(x, y);
+			ui_move_pointer(x, y);
 			break;
 
 		case RDP_POINTER_COLOR:
@@ -1344,7 +1354,7 @@ process_bitmap_data(STREAM s)
 	/* read compressed bitmap data */
 	if (!s_check_rem(s, size))
 	{
-		rdp_protocol_error("process_bitmap_data(), consume of bitmap data from stream would overrun", &packet);
+		rdp_protocol_error("consume of bitmap data from stream would overrun", &packet);
 	}
 	in_uint8p(s, data, size);
 	bmpdata = (uint8 *) xmalloc(width * height * Bpp);
@@ -1507,6 +1517,7 @@ process_data_pdu(STREAM s, uint32 * ext_disc_reason)
 	uint16 clen;
 	uint32 len;
 
+	uint8 *buf;
 	uint32 roff, rlen;
 
 	struct stream *ns = &(g_mppc_dict.ns);
@@ -1522,20 +1533,21 @@ process_data_pdu(STREAM s, uint32 * ext_disc_reason)
 	{
 		if (len > RDP_MPPC_DICT_SIZE)
 			error("error decompressed packet size exceeds max\n");
-		if (mppc_expand(s->p, clen, ctype, &roff, &rlen) == -1)
+		in_uint8p(s, buf, clen);
+		if (mppc_expand(buf, clen, ctype, &roff, &rlen) == -1)
 			error("error while decompressing packet\n");
 
 		/* len -= 18; */
 
 		/* allocate memory and copy the uncompressed data into the temporary stream */
-		ns->data = (uint8 *) xrealloc(ns->data, rlen);
+		s_realloc(ns, rlen);
+		s_reset(ns);
 
-		memcpy((ns->data), (unsigned char *) (g_mppc_dict.hist + roff), rlen);
+		out_uint8a(ns, (unsigned char *) (g_mppc_dict.hist + roff), rlen);
 
-		ns->size = rlen;
-		ns->end = (ns->data + ns->size);
-		ns->p = ns->data;
-		ns->rdp_hdr = ns->p;
+		s_mark_end(ns);
+		s_seek(ns, 0);
+		s_push_layer(ns, rdp_hdr, 0);
 
 		s = ns;
 	}
@@ -1794,7 +1806,7 @@ rdp_loop(RD_BOOL * deactivated, uint32 * ext_disc_reason)
 			default:
 				unimpl("PDU %d\n", type);
 		}
-		cont = g_next_packet < s->end;
+		cont = g_next_packet < s_length(s);
 	}
 	return True;
 }
@@ -1831,7 +1843,7 @@ rdp_connect(char *server, uint32 flags, char *domain, char *password,
 void
 rdp_reset_state(void)
 {
-	g_next_packet = NULL;	/* reset the packet information */
+	g_next_packet = 0;	/* reset the packet information */
 	g_rdp_shareid = 0;
 	sec_reset_state();
 }
@@ -1853,10 +1865,11 @@ rdp_disconnect(void)
 
 */
 void
-rdp_protocol_error(const char *message, STREAM s)
+_rdp_protocol_error(const char *file, int line, const char *func,
+		    const char *message, STREAM s)
 {
-	error("%s(), %s", __func__, message);
+	error("%s:%d: %s(), %s", file, line, func, message);
 	if (s)
-		hexdump(s->p, s_length(s));
+		hexdump(s->data, s_length(s));
 	exit(0);
 }

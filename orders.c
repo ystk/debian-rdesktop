@@ -20,7 +20,7 @@
 #include "rdesktop.h"
 #include "orders.h"
 
-extern uint8 *g_next_packet;
+extern size_t g_next_packet;
 static RDP_ORDER_STATE g_order_state;
 extern RDP_VERSION g_rdp_version;
 
@@ -101,7 +101,7 @@ rdp_in_colour(STREAM s, uint32 * colour)
 }
 
 /* Parse bounds information */
-static RD_BOOL
+static void
 rdp_parse_bounds(STREAM s, BOUNDS * bounds)
 {
 	uint8 present;
@@ -127,12 +127,10 @@ rdp_parse_bounds(STREAM s, BOUNDS * bounds)
 		rdp_in_coord(s, &bounds->bottom, False);
 	else if (present & 128)
 		rdp_in_coord(s, &bounds->bottom, True);
-
-	return s_check(s);
 }
 
 /* Parse a pen */
-static RD_BOOL
+static void
 rdp_parse_pen(STREAM s, PEN * pen, uint32 present)
 {
 	if (present & 1)
@@ -143,8 +141,6 @@ rdp_parse_pen(STREAM s, PEN * pen, uint32 present)
 
 	if (present & 4)
 		rdp_in_colour(s, &pen->colour);
-
-	return s_check(s);
 }
 
 static void
@@ -175,7 +171,7 @@ setup_brush(BRUSH * out_brush, BRUSH * in_brush)
 }
 
 /* Parse a brush */
-static RD_BOOL
+static void
 rdp_parse_brush(STREAM s, BRUSH * brush, uint32 present)
 {
 	if (present & 1)
@@ -192,8 +188,6 @@ rdp_parse_brush(STREAM s, BRUSH * brush, uint32 present)
 
 	if (present & 16)
 		in_uint8a(s, &brush->pattern[1], 7);
-
-	return s_check(s);
 }
 
 /* Process a destination blt order */
@@ -1259,7 +1253,7 @@ process_secondary_order(STREAM s)
 	uint16 length;
 	uint16 flags;
 	uint8 type;
-	uint8 *next_order;
+	size_t next_order;
 	struct stream packet = *s;
 
 	in_uint16_le(s, length);
@@ -1268,10 +1262,10 @@ process_secondary_order(STREAM s)
 
 	if (!s_check_rem(s, length + 7))
 	{
-		rdp_protocol_error("process_secondary_order(), next order pointer would overrun stream", &packet);
+		rdp_protocol_error("next order pointer would overrun stream", &packet);
 	}
 
-	next_order = s->p + (sint16) length + 7;
+	next_order = s_tell(s) + length + 7;
 
 	switch (type)
 	{
@@ -1307,7 +1301,7 @@ process_secondary_order(STREAM s)
 			unimpl("secondary order %d\n", type);
 	}
 
-	s->p = next_order;
+	s_seek(s, next_order);
 }
 
 /* Process an order PDU */
@@ -1447,8 +1441,8 @@ process_orders(STREAM s, uint16 num_orders)
 	}
 #if 0
 	/* not true when RDP_COMPRESSION is set */
-	if (s->p != g_next_packet)
-		error("%d bytes remaining\n", (int) (g_next_packet - s->p));
+	if (s_tell(s) != g_next_packet)
+		error("%d bytes remaining\n", (int) (g_next_packet - s_tell(s)));
 #endif
 
 }

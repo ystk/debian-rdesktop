@@ -1,3 +1,15 @@
+rdesktop (1.8.6-0+deb8u1) jessie-security; urgency=high
+
+  * Non-maintainer upload by the LTS Security Team.
+  * Update to new upstream release 1.8.6.
+    - Adds bound checking to protocol handling in order to fix possible
+      security vulnerabilities when communicating with a malicious server.
+      (Closes: #930387)
+      No CVE has been assigned yet, but in Debian the issue is tracked
+      here: https://security-tracker.debian.org/tracker/TEMP-0930387-988530
+
+ -- Jonas Meurer <jonas@freesources.org>  Tue, 25 Jun 2019 12:22:28 +0200
+
 rdesktop (1.8.4-0+deb8u1) jessie-security; urgency=medium
 
   * Non-maintainer upload by the LTS Team.

@@ -41,7 +41,7 @@ mcs_out_domain_params(STREAM s, int max_channels, int max_users, int max_tokens,
 }
 
 /* Parse a DOMAIN_PARAMS structure (ASN.1 BER) */
-static RD_BOOL
+static void
 mcs_parse_domain_params(STREAM s)
 {
 	uint32 length;
@@ -51,19 +51,17 @@ mcs_parse_domain_params(STREAM s)
 
 	if (!s_check_rem(s, length))
 	{
-		rdp_protocol_error("mcs_parse_domain_params(), consume domain params from stream would overrun", &packet);
+		rdp_protocol_error("consume domain params from stream would overrun", &packet);
 	}
 
 	in_uint8s(s, length);
-
-	return s_check(s);
 }
 
 /* Send an MCS_CONNECT_INITIAL message (ASN.1 BER) */
 static void
 mcs_send_connect_initial(STREAM mcs_data)
 {
-	int datalen = mcs_data->end - mcs_data->data;
+	int datalen = s_length(mcs_data);
 	int length = 9 + 3 * 34 + 4 + datalen;
 	STREAM s;
 
@@ -83,10 +81,11 @@ mcs_send_connect_initial(STREAM mcs_data)
 	mcs_out_domain_params(s, 0xffff, 0xfc17, 0xffff, 0xffff);	/* max params */
 
 	ber_out_header(s, BER_TAG_OCTET_STRING, datalen);
-	out_uint8p(s, mcs_data->data, datalen);
+	out_uint8a(s, mcs_data->data, datalen);
 
 	s_mark_end(s);
 	iso_send(s);
+	s_free(s);
 }
 
 /* Expect a MCS_CONNECT_RESPONSE message (ASN.1 BER) */
@@ -118,7 +117,7 @@ mcs_recv_connect_response(STREAM mcs_data)
 
 	if (!s_check_rem(s, length))
 	{
-		rdp_protocol_error("mcs_recv_connect_response(), consume connect id from stream would overrun", &packet);
+		rdp_protocol_error("consume connect id from stream would overrun", &packet);
 	}
 
 	mcs_parse_domain_params(s);
@@ -134,9 +133,10 @@ mcs_recv_connect_response(STREAM mcs_data)
 	   length = mcs_data->size;
 	   }
 
-	   in_uint8a(s, mcs_data->data, length);
-	   mcs_data->p = mcs_data->data;
-	   mcs_data->end = mcs_data->data + length;
+	   s_reset(mcs_data);
+	   in_uint8stream(s, mcs_data, length);
+	   s_mark_end(mcs_data);
+	   s_seek(mcs_data, 0);
 	 */
 	return s_check_end(s);
 }
@@ -155,6 +155,7 @@ mcs_send_edrq(void)
 
 	s_mark_end(s);
 	iso_send(s);
+	s_free(s);
 }
 
 /* Send an AUrq message (ASN.1 PER) */
@@ -169,6 +170,7 @@ mcs_send_aurq(void)
 
 	s_mark_end(s);
 	iso_send(s);
+	s_free(s);
 }
 
 /* Expect a AUcf message (ASN.1 PER) */
@@ -218,6 +220,7 @@ mcs_send_cjrq(uint16 chanid)
 
 	s_mark_end(s);
 	iso_send(s);
+	s_free(s);
 }
 
 /* Expect a CJcf message (ASN.1 PER) */
@@ -271,7 +274,7 @@ mcs_send_to_channel(STREAM s, uint16 channel)
 	uint16 length;
 
 	s_pop_layer(s, mcs_hdr);
-	length = s->end - s->p - 8;
+	length = s_remaining(s) - 8;
 	length |= 0x8000;
 
 	out_uint8(s, (MCS_SDRQ << 2));
