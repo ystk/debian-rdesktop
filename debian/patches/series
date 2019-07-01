@@ -1,21 +1,5 @@
-# Nomenclature for the file ordering/naming
-# First digit:
-# 1 -> Has been applied in some branch upstream.
-#      It will eventually be applied in a release
-# 2 -> Has been or will be fixed differently upstream
-# 3 -> Pending upstream. Waiting to land on a branch or some review,
-#      or some asked modifications
-# 6 -> Not yet sent upstream
-# 8 -> Debian specific. This we don't want to send upstream or that
-#      upstream don't want to apply.
-#
-# Second digit:
-# 0 -> Build system
-# 1 -> Mostly build
-# 2 -> Preferences
-# 5 -> General code
-# 8 -> Fix for some architectures support
-#
 01_paging.patch
 20_update_manpage.dpatch
 80_handle_nostrip_option.dpatch
+90-fixed_version_number_and_typo.patch
+91-sec_decrypt_the_correct_amount_of_data.patch

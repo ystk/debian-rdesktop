@@ -1,3 +1,13 @@
+rdesktop (1.8.6-0+deb8u2) jessie-security; urgency=high
+
+  * Non-maintainer upload by the LTS Security Team.
+  * Backport 1.8.6-2 from unstable in order to fix a regression introduced in
+    1.8.6 upstream:
+    - Backport fixed version number and typo.
+    - Backport sec_decrypt() the correct amount of data (closes: #930511).
+
+ -- Jonas Meurer <jonas@freesources.org>  Mon, 01 Jul 2019 12:48:44 +0200
+
 rdesktop (1.8.6-0+deb8u1) jessie-security; urgency=high
 
   * Non-maintainer upload by the LTS Security Team.
